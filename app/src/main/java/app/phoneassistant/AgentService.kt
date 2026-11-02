@@ -249,7 +249,7 @@ class AgentService : AccessibilityService() {
         for (step in 1..60) {
             while (true) { val x = extras.poll() ?: break; taskText += "\nUser then added: $x"; Bus.log("➕ $x") }
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = if (turns.isEmpty()) (if (notes.isEmpty()) "" else "Earlier this session:\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
+            val firstText = (if (notes.isEmpty()) "" else "Earlier this session:\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
