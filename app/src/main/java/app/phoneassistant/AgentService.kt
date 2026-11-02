@@ -25,6 +25,9 @@ import android.os.Vibrator
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -42,7 +45,15 @@ class AgentService : AccessibilityService() {
     private var overlay: TextView? = null
     private var wantImage = false
 
-    override fun onServiceConnected() { instance = this }
+    override fun onServiceConnected() {
+        instance = this
+        tts = TextToSpeech(this) { ttsReady = it == TextToSpeech.SUCCESS }
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(id: String?) {}
+            override fun onDone(id: String?) { main.post { speaking = false; if (voice) startRec() } }
+            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; if (voice) startRec() } }
+        })
+    }
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
     override fun onInterrupt() {}
     override fun onDestroy() { instance = null; super.onDestroy() }
@@ -65,7 +76,15 @@ class AgentService : AccessibilityService() {
     }
 
     // Voice session: hold the key once, keep talking; every sentence becomes a command until you say stop or tap the overlay.
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    @Volatile private var speaking = false
     private var voice = false
+    private var tempVoice = false
+    @Volatile private var asking = false
+    private var question = ""
+    private val answers = java.util.concurrent.LinkedBlockingQueue<String>()
+    private val notes = ArrayList<String>()   // earlier commands + results this session
     private var partial = ""
     private var voiceCfg: Cfg? = null
     private var errStreak = 0
@@ -76,6 +95,7 @@ class AgentService : AccessibilityService() {
 
     private fun refreshOverlay() {
         val t = when {
+            asking -> "❓ $question" + if (voice) "  🎤 " + partial.ifEmpty { "answer me" } else ""
             voice && running -> "⚙ Working…  🎤 " + partial.ifEmpty { "listening" } + " (tap to end)"
             voice -> "🎤 " + partial.ifEmpty { "Listening…" } + " (tap to end)"
             running -> "Working… (tap to stop)"
@@ -89,21 +109,22 @@ class AgentService : AccessibilityService() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { showOverlay("Open Phone Assistant once and allow the microphone"); main.postDelayed({ refreshOverlay() }, 3000); return }
         val c = cfgFromPrefs()
         if (c == null) { showOverlay("Add your API key in the app first"); main.postDelayed({ refreshOverlay() }, 3000); return }
-        voice = true; voiceCfg = c; errStreak = 0; partial = ""
-        buzz(); refreshOverlay(); startRec()
+        voiceCfg = c; beginVoice()
     }
+
+    private fun beginVoice() { voice = true; errStreak = 0; partial = ""; buzz(); refreshOverlay(); startRec() }
 
     private fun endSession(announce: Boolean) {
         if (announce) stopFlag = true
         val was = voice
-        voice = false; partial = ""
+        voice = false; tempVoice = false; asking = false; partial = ""
         rec?.cancel(); rec?.destroy(); rec = null
         if (was) buzz(80)
         refreshOverlay()
     }
 
     private fun startRec() {
-        if (!voice) return
+        if (!voice || speaking) return
         rec?.destroy()
         val r = SpeechRecognizer.createSpeechRecognizer(this); rec = r
         fun again(ms: Long) = main.postDelayed({ startRec() }, ms)
@@ -136,10 +157,37 @@ class AgentService : AccessibilityService() {
         r.startListening(i)
     }
 
+    private fun langTag() = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
+
+    private fun speak(t: String) = main.post {
+        val e = tts ?: return@post
+        if (!ttsReady || t.isBlank()) return@post
+        speaking = true; rec?.cancel(); rec?.destroy(); rec = null
+        val tag = langTag(); e.language = if (tag.isEmpty()) Locale.getDefault() else Locale.forLanguageTag(tag)
+        e.speak(t.take(300), TextToSpeech.QUEUE_FLUSH, null, "u")
+    }
+
+    /** Blocks the agent thread until the user answers by voice. */
+    private fun askUser(q: String): String {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return "error: cannot ask, no microphone permission. Make your best guess or finish."
+        answers.clear(); question = q; asking = true
+        Bus.log("❓ $q")
+        main.post { speak(q); if (!voice) { tempVoice = true; beginVoice() } else refreshOverlay() }
+        var waited = 0
+        while (!stopFlag && waited < 180_000) {
+            val a = answers.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (a != null) { main.post { asking = false; if (tempVoice) endSession(false) else refreshOverlay() }; return "User answered: $a" }
+            waited += 500
+        }
+        main.post { asking = false; if (tempVoice) endSession(false) else refreshOverlay() }
+        return if (stopFlag) "error: stopped" else "error: user did not answer. Make your best guess or finish."
+    }
+
     private fun utterance(t: String) {
         val n = t.lowercase().replace(Regex("[^\\p{L}\\p{N}' ]"), "").trim()
         if (n in stopWords) { Bus.log("🎤 \"$t\" → stop"); endSession(true); return }
         Bus.log("🎤 $t")
+        if (asking) { answers.put(t); return }
         if (running) extras.add(t) else voiceCfg?.let { start(t, it) }
     }
 
@@ -194,22 +242,24 @@ class AgentService : AccessibilityService() {
     private fun loop(task: String, cfg: Cfg) {
         var taskText = task
         extras.clear()
+        var nudges = 0; var lastHash = 0; var same = 0
         val turns = ArrayList<Turn>()
         val tools = tools()
         val hearth = cfg.hearth
         for (step in 1..60) {
             while (true) { val x = extras.poll() ?: break; taskText += "\nUser then added: $x"; Bus.log("➕ $x") }
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = if (turns.isEmpty()) "Task: $taskText\n\n" + observe() else "Task: $taskText"
+            val firstText = if (turns.isEmpty()) (if (notes.isEmpty()) "" else "Earlier this session:\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
                 if (hearth) {
                     msgs.put(JSONObject().put("role", "assistant").put("content", t.raw))
-                    msgs.put(JSONObject().put("role", "user").put("content", t.briefs.joinToString("\n") + if (lastTurn) "\n" + t.observation else ""))
+                    msgs.put(JSONObject().put("role", "user").put("content", (if (t.briefs.isEmpty()) "Continue." else t.briefs.joinToString("\n")) + if (lastTurn) "\n" + t.observation else ""))
                     continue
                 }
                 msgs.put(JSONObject().put("role", "assistant").put("content", t.assistant))
+                if (t.ids.isEmpty()) { msgs.put(JSONObject().put("role", "user").put("content", if (lastTurn) t.obs else JSONArray().put(text("Continue.")))); continue }
                 val res = JSONArray()
                 for (j in t.ids.indices) {
                     val last = lastTurn && j == t.ids.lastIndex
@@ -235,16 +285,27 @@ class AgentService : AccessibilityService() {
                     if (it.getString("type") == "tool_use") calls.add(Triple(it.getString("id"), it.getString("name"), it.getJSONObject("input")))
                 }
             }
-            if (calls.isEmpty()) { Bus.log("■ Done"); return }
+            if (calls.isEmpty()) {
+                if (++nudges > 3) { Bus.log("■ Done"); return }
+                val nudge = "You must call a tool now: continue towards the goal, ask_user if unsure, or finish if the goal is verified done."
+                val ob = nudge + "\n" + observe()
+                turns.add(Turn(content, emptyList(), emptyList(), JSONArray().put(text(ob)), raw, ob)); continue
+            }
             val ids = ArrayList<String>(); val briefs = ArrayList<String>()
             for ((id, name, inp) in calls) {
                 if (stopFlag) { Bus.log("■ Stopped"); return }
                 Bus.log("→ $name $inp")
-                if (name == "finish") { Bus.log("✅ " + inp.optString("message")); return }
+                if (name == "finish") { val m = inp.optString("message"); Bus.log("✅ $m"); notes.add("\"$task\" → $m"); if (notes.size > 6) notes.removeAt(0); speak(m); return }
                 ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp))
             }
             Thread.sleep(800)
-            val observation = briefs.last() + "\n" + observe()
+            val scr = observe()
+            val h = scr.hashCode()
+            var warn = ""
+            if (h == lastHash) { same++; warn = "\n⚠ The screen did NOT change after your last action. Do not repeat it: pick a different element or approach." + if (same >= 2) " You are stuck: call ask_user now." else ""; if (!hearth) wantImage = true } else same = 0
+            lastHash = h
+            if (!hearth && nodes.size < 3) wantImage = true
+            val observation = briefs.last() + warn + "\n" + scr
             val o = JSONArray().put(text(observation))
             if (wantImage) { wantImage = false; if (!hearth) screenshotBlock()?.let { o.put(it) } }
             turns.add(Turn(content, ids, briefs, o, raw, observation))
@@ -286,7 +347,8 @@ class AgentService : AccessibilityService() {
         a.put(tool("key", "Press a system key.", JSONObject().put("key", JSONObject().put("type", "string").put("enum", JSONArray(listOf("back", "home", "recents", "notifications")))), listOf("key")))
         a.put(tool("wait", "Wait for the screen to load.", JSONObject().put("seconds", p("number"))))
         a.put(tool("screenshot", "Attach a screenshot to the next observation. Costly: use only when the element list is empty or insufficient (camera views, images, games).", JSONObject()))
-        val f = tool("finish", "End the task. Report the result, or ask the user a question if you are blocked or unsure.", JSONObject().put("message", p("string")), listOf("message"))
+        a.put(tool("ask_user", "Ask the user a short question out loud and wait for their spoken answer. Use when the request is unclear or doesn't match what's on screen, when several options fit (e.g. two contacts), when something unexpected blocks you (login, captcha, permission), or after two different approaches failed.", JSONObject().put("question", p("string")), listOf("question")))
+        val f = tool("finish", "End the task ONLY when the goal is verified done on screen (or truly impossible). message = one short spoken sentence with the result.", JSONObject().put("message", p("string")), listOf("message"))
         f.put("cache_control", JSONObject().put("type", "ephemeral"))
         a.put(f)
         return a
@@ -319,6 +381,7 @@ class AgentService : AccessibilityService() {
                     if (performGlobalAction(a)) "ok" else "error: key failed"
                 }
                 "wait" -> { Thread.sleep((i.optDouble("seconds", 1.0).coerceIn(0.2, 10.0) * 1000).toLong()); "waited" }
+                "ask_user" -> askUser(i.getString("question"))
                 "screenshot" -> { wantImage = true; "screenshot attached below" }
                 else -> "error: unknown tool"
             }
@@ -427,26 +490,25 @@ class AgentService : AccessibilityService() {
 
 private const val ESSENTIAL_SCAN = 250
 
-private const val SYSTEM = """You control an Android phone via tools (the user may speak Dutch; match app names as installed, and answer finish messages in the user's language) to complete the user's task. Each turn you receive a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
-Rules:
-- Be efficient: fewest steps possible. You may call several tools in one turn only when later steps don't depend on a changed screen.
-- Prefer open_app over navigating home screens. Prefer tap by id; use tap_xy only for elements missing from the list.
-- Do NOT use screenshot unless the list lacks what you need (e.g. camera preview, images). If a screenshot is shown it is scaled to 540px wide; tap_xy takes real screen pixels (see Screen WxH), so scale coordinates up.
-- Ids change after every screen change; only use ids from the latest list.
-- If a step fails twice, try a different approach (scroll, back, other element).
-- The user may keep talking while you work. Lines "User then added: ..." are new instructions from them: follow them right away; they may add to, change or replace the task.
-- Do everything the user says, directly and without asking for confirmation: it is their own phone and they asked for it (including sending messages, snaps, posts, and entering details they gave you). Only call finish with a question if the request is truly ambiguous or impossible.
-- When done, call finish with a one-line result."""
+private const val RULES = """How to work (follow strictly):
+1. Before EVERY action write 1-2 short sentences: GOAL (the end result you must reach), what you see now, whether your last action worked, and your next step. Never lose sight of the goal.
+2. After every action check the new screen: did it do what you intended? If not, try something different (other element, tap_xy, scroll, back, screenshot). Never repeat a failing action more than twice. Keep trying until the goal is reached; don't give up early.
+3. Finish only when the goal is verified done on screen (e.g. the message shows as sent). For multi-part requests do every part.
+4. Ask the user (ask_user) when the request is unclear or doesn't match what you see (e.g. contact not found, two matches, wrong app), when something unexpected blocks you (login, captcha, permission), or after two failed approaches. Ask short, concrete questions. Don't ask when the request is clear: just do it, without asking for confirmation.
+5. Be efficient: fewest steps. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
+6. The user may keep talking while you work. Lines "User then added: ..." are new instructions: follow them right away; they may add to, change or replace the task. "Earlier this session" lists previous commands for context.
+7. The user may speak Dutch; match app names as installed; write spoken messages (finish, ask_user) in the user's language.
+8. Do everything the user says: it is their own phone. Enter details they gave you."""
 
-private const val SYSTEM_TEXT = """You control an Android phone to complete the user's task. Each turn you get a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
-Reply with a one-line thought, then a JSON array of actions (nothing after it), e.g.
-Open the app. [{"tool":"open_app","name":"Snapchat"}]
+private const val SYSTEM = """You control an Android phone via tools to complete the user's request. Each turn you receive a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
+$RULES
+Screenshots are expensive: use the screenshot tool only when the list lacks what you need (camera preview, images); one is attached automatically when the screen seems stuck. It is scaled to 540px wide; tap_xy takes real screen pixels (see Screen WxH), so scale coordinates up."""
+
+private const val SYSTEM_TEXT = """You control an Android phone to complete the user's request. Each turn you get a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
+Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
+GOAL: send a snap to Anna. Snapchat isn't open yet. [{"tool":"open_app","name":"Snapchat"}]
 Tools:
-open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications} | wait{seconds} | finish{message}
-Rules:
-- Be efficient: fewest steps. Put several actions in the array only when later ones don't depend on a changed screen.
-- Prefer open_app over navigating. Prefer tap by id. Ids change after every screen change; use only the latest list. No screenshots are available.
-- If a step fails twice, try another approach (scroll, back, other element).
-- The user may keep talking while you work. Lines "User then added: ..." are new instructions from them: follow them right away; they may add to, change or replace the task.
-- Do everything the user says, directly and without asking for confirmation: it is their own phone and they asked for it (including sending messages, snaps, posts, and entering details they gave you). Only finish with a question if the request is truly ambiguous or impossible.
-- When done, reply with [{"tool":"finish","message":"one-line result"}]."""
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications} | wait{seconds} | ask_user{question} (asks the user out loud, returns their answer) | finish{message} (only when the goal is verified done)
+No screenshots are available.
+$RULES
+Always end your reply with the JSON array of actions."""
