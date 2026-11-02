@@ -29,7 +29,7 @@ class AgentService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
     private val nodes = ArrayList<AccessibilityNodeInfo>()
-    @Volatile private var running = false
+    @Volatile var running = false; private set
     @Volatile private var stopFlag = false
     private var overlay: TextView? = null
     private var wantImage = false
@@ -44,11 +44,11 @@ class AgentService : AccessibilityService() {
     fun start(task: String, cfg: Cfg): Boolean {
         if (running) return false
         running = true; stopFlag = false
-        showOverlay("Working… (tap to stop)")
+        showOverlay("Working… (tap to stop)"); Bus.listener?.invoke()
         Bus.log("▶ $task")
         thread {
             try { loop(task, cfg) } catch (e: Exception) { Bus.log("Error: ${e.message}") }
-            running = false; hideOverlay()
+            running = false; hideOverlay(); Bus.listener?.invoke()
         }
         return true
     }
