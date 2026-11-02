@@ -41,13 +41,13 @@ class AgentService : AccessibilityService() {
 
     fun stop() { stopFlag = true }
 
-    fun start(task: String, key: String, model: String): Boolean {
+    fun start(task: String, cfg: Cfg): Boolean {
         if (running) return false
         running = true; stopFlag = false
         showOverlay("Working… (tap to stop)")
         Bus.log("▶ $task")
         thread {
-            try { loop(task, key, model) } catch (e: Exception) { Bus.log("Error: ${e.message}") }
+            try { loop(task, cfg) } catch (e: Exception) { Bus.log("Error: ${e.message}") }
             running = false; hideOverlay()
         }
         return true
@@ -78,47 +78,74 @@ class AgentService : AccessibilityService() {
     }
 
     // ---------- agent loop ----------
-    private class Turn(val assistant: JSONArray, val ids: List<String>, val briefs: List<String>, val obs: JSONArray)
+    class Cfg(val hearth: Boolean, val url: String, val key: String, val model: String)
+    private class Turn(val assistant: JSONArray, val ids: List<String>, val briefs: List<String>, val obs: JSONArray, val raw: String, val observation: String)
 
-    private fun loop(task: String, key: String, model: String) {
+    private fun loop(task: String, cfg: Cfg) {
         val turns = ArrayList<Turn>()
         val tools = tools()
+        val hearth = cfg.hearth
         for (step in 1..40) {
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val first = if (turns.isEmpty()) JSONArray().put(text("Task: $task\n\n" + observe())) else JSONArray().put(text("Task: $task"))
-            val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", first))
+            val firstText = if (turns.isEmpty()) "Task: $task\n\n" + observe() else "Task: $task"
+            val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
+                val lastTurn = i == turns.lastIndex
+                if (hearth) {
+                    msgs.put(JSONObject().put("role", "assistant").put("content", t.raw))
+                    msgs.put(JSONObject().put("role", "user").put("content", t.briefs.joinToString("\n") + if (lastTurn) "\n" + t.observation else ""))
+                    continue
+                }
                 msgs.put(JSONObject().put("role", "assistant").put("content", t.assistant))
                 val res = JSONArray()
                 for (j in t.ids.indices) {
-                    val last = i == turns.lastIndex && j == t.ids.lastIndex
+                    val last = lastTurn && j == t.ids.lastIndex
                     val content: Any = if (last) t.obs else t.briefs[j]
                     res.put(JSONObject().put("type", "tool_result").put("tool_use_id", t.ids[j]).put("content", content))
                 }
                 msgs.put(JSONObject().put("role", "user").put("content", res))
             }
-            val body = JSONObject().put("model", model).put("max_tokens", 1024)
-                .put("system", JSONArray().put(JSONObject().put("type", "text").put("text", SYSTEM).put("cache_control", JSONObject().put("type", "ephemeral"))))
-                .put("tools", tools).put("messages", msgs)
-            val resp = Api.post(key, body)
+            val body = JSONObject().put("model", cfg.model).put("max_tokens", 1024).put("messages", msgs)
+            if (hearth) body.put("system", SYSTEM_TEXT).put("stream", false)
+            else body.put("system", JSONArray().put(JSONObject().put("type", "text").put("text", SYSTEM).put("cache_control", JSONObject().put("type", "ephemeral")))).put("tools", tools)
+            val resp = Api.post(cfg.url, cfg.key, body)
             val content = resp.getJSONArray("content")
-            val uses = (0 until content.length()).map { content.getJSONObject(it) }.filter { it.getString("type") == "tool_use" }
-            for (i in 0 until content.length()) content.getJSONObject(i).let { if (it.getString("type") == "text") Bus.log("💬 " + it.getString("text")) }
-            if (uses.isEmpty()) { Bus.log("■ Done"); return }
+            val raw = (0 until content.length()).map { content.getJSONObject(it) }.filter { it.getString("type") == "text" }.joinToString("\n") { it.getString("text") }
+            val calls = ArrayList<Triple<String, String, JSONObject>>()   // id, name, input
+            if (hearth) {
+                val acts = parseActions(raw)
+                Bus.log("💬 " + raw.substringBefore('[').trim().take(300))
+                acts.forEachIndexed { k, a -> calls.add(Triple("h$step-$k", a.optString("tool"), a)) }
+            } else {
+                for (i in 0 until content.length()) content.getJSONObject(i).let {
+                    if (it.getString("type") == "text") Bus.log("💬 " + it.getString("text"))
+                    if (it.getString("type") == "tool_use") calls.add(Triple(it.getString("id"), it.getString("name"), it.getJSONObject("input")))
+                }
+            }
+            if (calls.isEmpty()) { Bus.log("■ Done"); return }
             val ids = ArrayList<String>(); val briefs = ArrayList<String>()
-            for (u in uses) {
+            for ((id, name, inp) in calls) {
                 if (stopFlag) { Bus.log("■ Stopped"); return }
-                val name = u.getString("name"); val inp = u.getJSONObject("input")
                 Bus.log("→ $name $inp")
                 if (name == "finish") { Bus.log("✅ " + inp.optString("message")); return }
-                ids.add(u.getString("id")); briefs.add(exec(name, inp))
+                ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp))
             }
             Thread.sleep(800)
-            val o = JSONArray().put(text(briefs.last() + "\n" + observe()))
-            if (wantImage) { wantImage = false; screenshotBlock()?.let { o.put(it) } }
-            turns.add(Turn(content, ids, briefs, o))
+            val observation = briefs.last() + "\n" + observe()
+            val o = JSONArray().put(text(observation))
+            if (wantImage) { wantImage = false; if (!hearth) screenshotBlock()?.let { o.put(it) } }
+            turns.add(Turn(content, ids, briefs, o, raw, observation))
         }
         Bus.log("■ Step limit reached")
+    }
+
+    /** Hearth has no tool calling: the model answers with a JSON array of actions like [{"tool":"tap","id":3}]. */
+    private fun parseActions(s: String): List<JSONObject> {
+        val a = s.indexOf('['); val b = s.lastIndexOf(']')
+        return try {
+            if (a >= 0 && b > a) JSONArray(s.substring(a, b + 1)).let { arr -> (0 until arr.length()).mapNotNull { arr.optJSONObject(it) } }
+            else { val x = s.indexOf('{'); val y = s.lastIndexOf('}'); if (x >= 0 && y > x) listOf(JSONObject(s.substring(x, y + 1))) else emptyList() }
+        } catch (e: Exception) { emptyList() }
     }
 
     private fun text(s: String) = JSONObject().put("type", "text").put("text", s)
@@ -294,3 +321,15 @@ Rules:
 - If a step fails twice, try a different approach (scroll, back, other element).
 - Stay on the user's task only. Never reveal or enter passwords/payment info unless the user gave them in the task. If the task is ambiguous or you are blocked, call finish with a question.
 - When done, call finish with a one-line result."""
+
+private const val SYSTEM_TEXT = """You control an Android phone to complete the user's task. Each turn you get a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
+Reply with a one-line thought, then a JSON array of actions (nothing after it), e.g.
+Open the app. [{"tool":"open_app","name":"Snapchat"}]
+Tools:
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications} | wait{seconds} | finish{message}
+Rules:
+- Be efficient: fewest steps. Put several actions in the array only when later ones don't depend on a changed screen.
+- Prefer open_app over navigating. Prefer tap by id. Ids change after every screen change; use only the latest list. No screenshots are available.
+- If a step fails twice, try another approach (scroll, back, other element).
+- Stay on the user's task. Never enter passwords/payment info unless given in the task. If ambiguous or blocked, finish with a question.
+- When done, reply with [{"tool":"finish","message":"one-line result"}]."""

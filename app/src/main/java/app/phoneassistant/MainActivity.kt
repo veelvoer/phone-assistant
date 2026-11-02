@@ -12,6 +12,9 @@ import android.widget.*
 class MainActivity : Activity() {
     private lateinit var key: EditText
     private lateinit var model: EditText
+    private lateinit var url: EditText
+    private lateinit var prov: Button
+    private var hearth = false
     private lateinit var task: EditText
     private lateinit var log: TextView
     private lateinit var scroll: ScrollView
@@ -26,10 +29,13 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, w)
         }
         key = EditText(this).apply {
-            hint = "Claude API key (sk-ant-...)"; setText(p.getString("key", ""))
+            setText(p.getString("key", ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        model = EditText(this).apply { hint = "Model"; setText(p.getString("model", "claude-haiku-5-5")); setSingleLine() }
+        hearth = p.getBoolean("hearth", false)
+        model = EditText(this).apply { hint = "Model"; setText(p.getString(if (hearth) "model_h" else "model", if (hearth) "haiku" else "claude-haiku-5-5")); setSingleLine() }
+        url = EditText(this).apply { hint = "Hearth server URL (https://...)"; setText(p.getString("url", "")); setSingleLine() }
+        prov = btn("") { toggle(p) }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2) }
         task = EditText(this).apply { hint = "What should I do? e.g. open Snapchat, open Anna's snap and send one back"; minLines = 2 }
         log = TextView(this).apply { textSize = 12f }
         scroll = ScrollView(this).apply { addView(log) }
@@ -39,9 +45,23 @@ class MainActivity : Activity() {
             addView(btn("Stop") { AgentService.instance?.stop() })
         }
         root.addView(btn("1. Enable accessibility service") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2) })
-        root.addView(key); root.addView(model); root.addView(task); root.addView(row)
+        root.addView(prov); root.addView(url); root.addView(key); root.addView(model); root.addView(task); root.addView(row)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
+        applyMode()
+    }
+
+    private fun applyMode() {
+        prov.text = if (hearth) "Provider: Hearth API key (tap to switch)" else "Provider: Claude API key (tap to switch)"
+        url.visibility = if (hearth) android.view.View.VISIBLE else android.view.View.GONE
+        key.hint = if (hearth) "Hearth API key" else "Claude API key (sk-ant-...)"
+    }
+
+    private fun toggle(p: android.content.SharedPreferences) {
+        p.edit().putString(if (hearth) "key_h" else "key", key.text.toString()).putString(if (hearth) "model_h" else "model", model.text.toString()).apply()
+        hearth = !hearth
+        key.setText(p.getString(if (hearth) "key_h" else "key", "")); model.setText(p.getString(if (hearth) "model_h" else "model", if (hearth) "haiku" else "claude-haiku-5-5"))
+        applyMode()
     }
 
     private fun run(p: android.content.SharedPreferences) {
@@ -52,8 +72,10 @@ class MainActivity : Activity() {
         }
         val k = key.text.toString().trim(); val m = model.text.toString().trim(); val t = task.text.toString().trim()
         if (k.isEmpty() || t.isEmpty()) { Toast.makeText(this, "API key and task required", Toast.LENGTH_SHORT).show(); return }
-        p.edit().putString("key", k).putString("model", m).apply()
-        if (svc.start(t, k, m)) moveTaskToBack(true)
+        val u = url.text.toString().trim()
+        if (hearth && u.isEmpty()) { Toast.makeText(this, "Hearth server URL required", Toast.LENGTH_SHORT).show(); return }
+        p.edit().putBoolean("hearth", hearth).putString(if (hearth) "key_h" else "key", k).putString(if (hearth) "model_h" else "model", m).putString("url", u).apply()
+        if (svc.start(t, AgentService.Cfg(hearth, if (hearth) u else "", k, m))) moveTaskToBack(true)
     }
 
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {

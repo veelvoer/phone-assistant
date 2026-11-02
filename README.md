@@ -8,6 +8,7 @@ Download `phone-assistant.apk` from the latest [Release](../../releases/latest) 
 ## Setup
 1. Open the app → **Enable accessibility service** → turn on *Phone Assistant* (on Android 13+ you may need "Allow restricted settings" in App info first).
 2. Paste your Claude API key (stored only on the device). Default model: `claude-haiku-5-5`.
+   No API key? Tap the provider button to switch to **Hearth**: enter your [Hearth](https://github.com/veelvoer/hearth) server URL and a Hearth API key (model `haiku`, `sonnet` or `opus`). Hearth mode is text-only (no screenshots) and each step is slower, since Hearth runs Claude Code per request.
 3. Type or speak a task → **Run**. Tap the red overlay to stop.
 
 ## How it works (efficiency)

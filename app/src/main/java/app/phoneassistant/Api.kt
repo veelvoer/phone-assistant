@@ -5,13 +5,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object Api {
-    fun post(key: String, body: JSONObject): JSONObject {
+    fun post(base: String, key: String, body: JSONObject): JSONObject {
         var last = ""
         repeat(3) { attempt ->
-            val c = URL("https://api.anthropic.com/v1/messages").openConnection() as HttpURLConnection
+            val c = URL(if (base.isBlank()) "https://api.anthropic.com/v1/messages" else base.trim().trimEnd('/').removeSuffix("/v1/messages") + "/v1/messages").openConnection() as HttpURLConnection
             c.requestMethod = "POST"
             c.connectTimeout = 20000
-            c.readTimeout = 120000
+            c.readTimeout = 300000
             c.doOutput = true
             c.setRequestProperty("x-api-key", key)
             c.setRequestProperty("anthropic-version", "2023-06-01")
