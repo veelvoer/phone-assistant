@@ -34,9 +34,9 @@ class MainActivity : Activity() {
         log = TextView(this).apply { textSize = 12f }
         scroll = ScrollView(this).apply { addView(log) }
         val row = LinearLayout(this).apply {
-            addView(btn("🎤") { startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 1) }, 0.5f)
-            addView(btn("Run", 1f) { run(p) })
-            addView(btn("Stop", 1f) { AgentService.instance?.stop() })
+            addView(btn("🎤") { startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 1) }.also { (it.layoutParams as LinearLayout.LayoutParams).weight = 0.5f })
+            addView(btn("Run") { run(p) })
+            addView(btn("Stop") { AgentService.instance?.stop() })
         }
         root.addView(btn("1. Enable accessibility service") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2) })
         root.addView(key); root.addView(model); root.addView(task); root.addView(row)

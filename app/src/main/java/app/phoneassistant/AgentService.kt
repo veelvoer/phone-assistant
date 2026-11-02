@@ -228,7 +228,7 @@ class AgentService : AccessibilityService() {
         val n = if (id != null) nodes.getOrNull(id) else rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         n ?: return "error: no input field (tap it first or pass id)"
         n.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENTS_SET_TEXT_CHARSEQUENCE, t) }
+        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, t) }
         if (!n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return "error: set text failed"
         if (submit) { Thread.sleep(300); n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id) }
         return "typed"
@@ -248,7 +248,7 @@ class AgentService : AccessibilityService() {
             if ((n.isClickable || n.isEditable || n.isScrollable || n.isCheckable || tx.isNotEmpty() || ds.isNotEmpty()) && nodes.size < 150) {
                 val r = Rect(); n.getBoundsInScreen(r)
                 if (!r.isEmpty) {
-                    sb.append("[${nodes.size}] ${n.className?.substringAfterLast('.') ?: ""}")
+                    sb.append("[${nodes.size}] ${n.className?.toString()?.substringAfterLast('.') ?: ""}")
                     if (tx.isNotEmpty()) sb.append(" \"$tx\"")
                     if (ds.isNotEmpty() && ds != tx) sb.append(" desc=\"$ds\"")
                     if (rid.isNotEmpty()) sb.append(" #$rid")
