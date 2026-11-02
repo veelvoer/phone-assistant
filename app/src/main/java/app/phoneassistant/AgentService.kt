@@ -14,9 +14,17 @@ import android.util.Base64
 import android.view.Display
 import android.view.Gravity
 import android.view.WindowManager
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -39,9 +47,66 @@ class AgentService : AccessibilityService() {
     override fun onInterrupt() {}
     override fun onDestroy() { instance = null; super.onDestroy() }
 
-    fun stop() { stopFlag = true }
+    fun stop() { stopFlag = true; main.post { rec?.cancel(); rec = null; if (!running) hideOverlay() } }
+
+    // ---------- Essential Key: double-press and hold to talk ----------
+    private var rec: SpeechRecognizer? = null
+    private var lastUp = 0L
+    private var second = false
+    private var held: Runnable? = null
+
+    override fun onKeyEvent(e: KeyEvent): Boolean {
+        if (e.scanCode != ESSENTIAL_SCAN) return false
+        android.util.Log.d("PA", "essential key action=${e.action} code=${e.keyCode}")
+        if (e.action == KeyEvent.ACTION_DOWN) {
+            if (e.repeatCount > 0) return second
+            second = lastUp > 0 && e.eventTime - lastUp < 500
+            if (second) { held = Runnable { held = null; lastUp = 0; listen() }; main.postDelayed(held!!, 450) }
+        } else if (e.action == KeyEvent.ACTION_UP) {
+            held?.let { main.removeCallbacks(it); held = null }
+            val was = second; second = false
+            lastUp = if (was) 0 else e.eventTime
+            return was
+        }
+        return second
+    }
+
+    private fun listen() {
+        if (running) { stop(); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { showOverlay("Open Phone Assistant once and allow the microphone"); main.postDelayed({ hideOverlay() }, 3000); return }
+        val c = cfgFromPrefs()
+        if (c == null) { showOverlay("Add your API key in the app first"); main.postDelayed({ hideOverlay() }, 3000); return }
+        (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
+        showOverlay("🎤 Listening… (tap to cancel)")
+        rec?.destroy()
+        val r = SpeechRecognizer.createSpeechRecognizer(this); rec = r
+        r.setRecognitionListener(object : RecognitionListener {
+            override fun onPartialResults(b: Bundle?) { b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { showOverlay("🎤 $it") } }
+            override fun onResults(b: Bundle?) {
+                rec = null
+                val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                if (t.isNullOrBlank()) { showOverlay("Didn't catch that"); main.postDelayed({ hideOverlay() }, 1500) } else start(t, c)
+            }
+            override fun onError(error: Int) { rec = null; showOverlay("Didn't catch that"); main.postDelayed({ hideOverlay() }, 1500) }
+            override fun onReadyForSpeech(p: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(v: Float) {}
+            override fun onBufferReceived(b: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onEvent(t: Int, b: Bundle?) {}
+        })
+        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
+    }
+
+    private fun cfgFromPrefs(): Cfg? {
+        val p = getSharedPreferences("p", MODE_PRIVATE); val h = p.getBoolean("hearth", false)
+        val k = p.getString(if (h) "key_h" else "key", "")?.trim().orEmpty(); val u = p.getString("url", "")?.trim().orEmpty()
+        if (k.isEmpty() || (h && u.isEmpty())) return null
+        return Cfg(h, if (h) u else "", k, p.getString(if (h) "model_h" else "model", if (h) "haiku" else "claude-haiku-5-5")!!)
+    }
 
     fun start(task: String, cfg: Cfg): Boolean {
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post { start(task, cfg) }; return true }
         if (running) return false
         running = true; stopFlag = false
         showOverlay("Working… (tap to stop)"); Bus.listener?.invoke()
@@ -311,6 +376,8 @@ class AgentService : AccessibilityService() {
             .put("data", Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)))
     }
 }
+
+private const val ESSENTIAL_SCAN = 250
 
 private const val SYSTEM = """You control an Android phone via tools to complete the user's task. Each turn you receive a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
 Rules:
