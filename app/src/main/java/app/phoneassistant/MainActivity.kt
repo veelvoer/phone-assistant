@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var key: EditText
     private lateinit var model: EditText
     private lateinit var keyHint: TextView
+    private lateinit var names: EditText
     private lateinit var langBtns: List<Pair<String, Button>>
     private lateinit var logCard: LinearLayout
     private lateinit var log: TextView
@@ -160,11 +161,14 @@ class MainActivity : Activity() {
             layoutParams = lp(top = 10)
             langBtns.forEachIndexed { i, (_, b) -> if (i > 0) addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(b) }
         }
+        names = input("Names & words you use, comma separated (friends, places…)").apply { layoutParams = lp(top = 6); setText(p.getString("names", "")) }
         settingsBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; layoutParams = lp(top = 12)
             addView(LinearLayout(this@MainActivity).apply { addView(segClaude); addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(segHearth) })
             addView(url); addView(key); addView(model); addView(keyHint)
             addView(tv("Voice language", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(langRow)
+            addView(tv("Names it should recognise", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(names)
+            addView(tv("Helps speech recognition and matching with friends/contacts, e.g. Jan, Sanne, Wout.", 12f, sub).apply { layoutParams = lp(top = 4) })
             addView(updateStatus)
             addView(button("Check for updates") { Updater.check(this@MainActivity, true) }.apply { layoutParams = lp(top = 6) })
         }
@@ -202,7 +206,7 @@ class MainActivity : Activity() {
 
     private fun saveProvider() {
         p.edit().putBoolean("hearth", hearth).putString(if (hearth) "key_h" else "key", key.text.toString().trim())
-            .putString(if (hearth) "model_h" else "model", model.text.toString().trim()).putString("url", url.text.toString().trim()).apply()
+            .putString(if (hearth) "model_h" else "model", model.text.toString().trim()).putString("url", url.text.toString().trim()).putString("names", names.text.toString().trim()).apply()
     }
 
     private fun setProvider(h: Boolean) {

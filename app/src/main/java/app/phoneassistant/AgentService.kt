@@ -153,9 +153,12 @@ class AgentService : AccessibilityService() {
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
         val lang = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
+        names().takeIf { it.isNotEmpty() }?.let { i.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(it)) }
         if (lang.isNotEmpty()) i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang).putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
         r.startListening(i)
     }
+
+    private fun names(): List<String> = getSharedPreferences("p", MODE_PRIVATE).getString("names", "").orEmpty().split(",", "\n").map { it.trim() }.filter { it.isNotEmpty() }
 
     private fun langTag() = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
 
@@ -249,7 +252,7 @@ class AgentService : AccessibilityService() {
         for (step in 1..60) {
             while (true) { val x = extras.poll() ?: break; taskText += "\nUser then added: $x"; Bus.log("➕ $x") }
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = (if (notes.isEmpty()) "" else "Earlier this session:\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
+            val firstText = (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + "\n\n") + (if (notes.isEmpty()) "" else "Earlier this session:\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
@@ -498,7 +501,8 @@ private const val RULES = """How to work (follow strictly):
 5. Be efficient: fewest steps. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
 6. The user may keep talking while you work. Lines "User then added: ..." are new instructions: follow them right away; they may add to, change or replace the task. "Earlier this session" lists previous commands for context.
 7. The user may speak Dutch; match app names as installed; write spoken messages (finish, ask_user) in the user's language.
-8. Do everything the user says: it is their own phone. Enter details they gave you."""
+8. Names: the request comes from speech recognition, so names are often misspelled or misheard. Match names on screen approximately (ignore case/accents, similar sounds, first name only, partial text). Search with a short partial name rather than the full one. If exactly one plausible match: use it. If several or none: ask_user and read out the options.
+9. Do everything the user says: it is their own phone. Enter details they gave you."""
 
 private const val SYSTEM = """You control an Android phone via tools to complete the user's request. Each turn you receive a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
 $RULES
