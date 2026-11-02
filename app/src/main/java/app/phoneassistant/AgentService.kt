@@ -88,7 +88,10 @@ class AgentService : AccessibilityService() {
             override fun onEndOfSpeech() {}
             override fun onEvent(t: Int, b: Bundle?) {}
         })
-        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        val lang = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
+        if (lang.isNotEmpty()) i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang).putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
+        r.startListening(i)
     }
 
     private fun cfgFromPrefs(): Cfg? {
@@ -372,7 +375,7 @@ class AgentService : AccessibilityService() {
 
 private const val ESSENTIAL_SCAN = 250
 
-private const val SYSTEM = """You control an Android phone via tools to complete the user's task. Each turn you receive a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
+private const val SYSTEM = """You control an Android phone via tools (the user may speak Dutch; match app names as installed, and answer finish messages in the user's language) to complete the user's task. Each turn you receive a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
 Rules:
 - Be efficient: fewest steps possible. You may call several tools in one turn only when later steps don't depend on a changed screen.
 - Prefer open_app over navigating home screens. Prefer tap by id; use tap_xy only for elements missing from the list.

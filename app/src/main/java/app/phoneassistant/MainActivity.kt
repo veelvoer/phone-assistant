@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var key: EditText
     private lateinit var model: EditText
     private lateinit var keyHint: TextView
+    private lateinit var langBtns: List<Pair<String, Button>>
     private lateinit var logCard: LinearLayout
     private lateinit var log: TextView
     private lateinit var updateStatus: TextView
@@ -135,7 +136,7 @@ class MainActivity : Activity() {
         }
         runBtn = button("Run", true) { onRun() }.apply { layoutParams = lp(0, -2, 0, 1f) }
         val mic = button("🎤 Speak") {
-            try { startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 1) }
+            try { startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).apply { p.getString("lang", "nl-BE")?.takeIf { it.isNotEmpty() }?.let { putExtra(RecognizerIntent.EXTRA_LANGUAGE, it) } }, 1) }
             catch (e: Exception) { Toast.makeText(this, "No speech recognizer on this phone", Toast.LENGTH_SHORT).show() }
         }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) } }
         root.addView(cardView(
@@ -152,10 +153,18 @@ class MainActivity : Activity() {
         model = input("Model").apply { layoutParams = lp(top = 10) }
         keyHint = tv("", 12f, sub).apply { layoutParams = lp(top = 8) }
         updateStatus = tv("", 12f, sub).apply { layoutParams = lp(top = 14) }
+        langBtns = listOf("nl-BE" to "Nederlands", "en-US" to "English", "" to "Auto").map { (c, n) ->
+            c to button(n) { p.edit().putString("lang", c).apply(); render() }.apply { layoutParams = lp(0, -2, 0, 1f) }
+        }
+        val langRow = LinearLayout(this).apply {
+            layoutParams = lp(top = 10)
+            langBtns.forEachIndexed { i, (_, b) -> if (i > 0) addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(b) }
+        }
         settingsBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; layoutParams = lp(top = 12)
             addView(LinearLayout(this@MainActivity).apply { addView(segClaude); addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(segHearth) })
             addView(url); addView(key); addView(model); addView(keyHint)
+            addView(tv("Voice language", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(langRow)
             addView(updateStatus)
             addView(button("Check for updates") { Updater.check(this@MainActivity, true) }.apply { layoutParams = lp(top = 6) })
         }
@@ -239,6 +248,8 @@ class MainActivity : Activity() {
         settingsArrow.text = if (settingsOpen) "▴" else "▾"
         fun seg(b: Button, on: Boolean) { b.setTextColor(if (on) 0xFFFFFFFF.toInt() else accent); b.background = if (on) bgOf(accent, 12) else bgOf(0x00000000, 12, accent) }
         seg(segClaude, !hearth); seg(segHearth, hearth)
+        val lang = p.getString("lang", "nl-BE")
+        langBtns.forEach { (c, b) -> seg(b, c == lang) }
         url.visibility = if (hearth) View.VISIBLE else View.GONE
         key.hint = if (hearth) "Hearth API key" else "Claude API key (sk-ant-…)"
         keyHint.text = if (hearth) "Don't have a Claude key? Use your Hearth server: model haiku, sonnet or opus. Text-only, so no screenshots." else "Get a key at console.anthropic.com. Haiku is cheapest and fastest."
