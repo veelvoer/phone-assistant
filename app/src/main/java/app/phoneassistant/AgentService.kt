@@ -57,18 +57,16 @@ class AgentService : AccessibilityService() {
 
     override fun onKeyEvent(e: KeyEvent): Boolean {
         if (e.scanCode != ESSENTIAL_SCAN) return false
-        android.util.Log.d("PA", "essential key action=${e.action} code=${e.keyCode}")
         if (e.action == KeyEvent.ACTION_DOWN) {
-            if (e.repeatCount > 0) return second
+            if (e.repeatCount > 0) return true
             second = lastUp > 0 && e.eventTime - lastUp < 500
             if (second) { held = Runnable { held = null; lastUp = 0; listen() }; main.postDelayed(held!!, 450) }
         } else if (e.action == KeyEvent.ACTION_UP) {
             held?.let { main.removeCallbacks(it); held = null }
-            val was = second; second = false
-            lastUp = if (was) 0 else e.eventTime
-            return was
+            lastUp = if (second) 0 else e.eventTime
+            second = false
         }
-        return second
+        return true   // swallow every Essential Key event so Nothing's own capture doesn't fire
     }
 
     private fun listen() {
