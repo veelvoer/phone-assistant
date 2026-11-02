@@ -36,7 +36,11 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 class AgentService : AccessibilityService() {
-    companion object { @Volatile var instance: AgentService? = null }
+    companion object {
+        @Volatile var instance: AgentService? = null
+        @Volatile var todos: List<Todo> = emptyList()
+    }
+    class Todo(val text: String, val status: String)
 
     private val main = Handler(Looper.getMainLooper())
     private val nodes = ArrayList<AccessibilityNodeInfo>()
@@ -57,6 +61,21 @@ class AgentService : AccessibilityService() {
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
     override fun onInterrupt() {}
     override fun onDestroy() { instance = null; super.onDestroy() }
+
+    fun interrupt(t: String) { if (t.isNotBlank() && running) { extras.add(t.trim()); Bus.log("➕ ${t.trim()}") } }
+
+    private fun planText(): String = if (todos.isEmpty()) "" else "\nTo-do list:\n" + todos.mapIndexed { i, t -> "${i + 1}. [${t.status}] ${t.text}" }.joinToString("\n")
+
+    private fun openTodos() = todos.filter { it.status == "pending" || it.status == "doing" }
+
+    private fun setPlan(arr: JSONArray): String {
+        val l = ArrayList<Todo>()
+        for (k in 0 until arr.length()) arr.optJSONObject(k)?.let { l.add(Todo(it.optString("text").take(120), it.optString("status", "pending").ifEmpty { "pending" })) }
+        todos = l
+        Bus.log("📋 " + l.joinToString(" | ") { (if (it.status == "done") "✓ " else if (it.status == "doing") "▶ " else if (it.status == "skipped") "– " else "○ ") + it.text })
+        main.post { refreshOverlay() }; Bus.listener?.invoke()
+        return "plan updated (${l.count { it.status == "done" }}/${l.size} done)"
+    }
 
     fun stop() { stopFlag = true; main.post { endSession(false) } }
 
@@ -93,12 +112,17 @@ class AgentService : AccessibilityService() {
 
     private fun buzz(ms: Long = 40) = (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
 
+    private fun planLine(): String {
+        val cur = todos.firstOrNull { it.status == "doing" } ?: todos.firstOrNull { it.status == "pending" } ?: return ""
+        return " ▶ ${cur.text.take(40)} (${todos.count { it.status == "done" } + 1}/${todos.size})"
+    }
+
     private fun refreshOverlay() {
         val t = when {
             asking -> "❓ $question" + if (voice) "  🎤 " + partial.ifEmpty { "answer me" } else ""
-            voice && running -> "⚙ Working…  🎤 " + partial.ifEmpty { "listening" } + " (tap to end)"
+            voice && running -> "⚙ Working…" + planLine() + "  🎤 " + partial.ifEmpty { "listening" } + " (tap to end)"
             voice -> "🎤 " + partial.ifEmpty { "Listening…" } + " (tap to end)"
-            running -> "Working… (tap to stop)"
+            running -> "Working…" + planLine() + " (tap to stop)"
             else -> null
         }
         if (t == null) hideOverlay() else showOverlay(t)
@@ -204,7 +228,7 @@ class AgentService : AccessibilityService() {
     fun start(task: String, cfg: Cfg): Boolean {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { start(task, cfg) }; return true }
         if (running) return false
-        running = true; stopFlag = false
+        running = true; stopFlag = false; todos = emptyList()
         refreshOverlay(); Bus.listener?.invoke()
         Bus.log("▶ $task")
         thread {
@@ -245,12 +269,12 @@ class AgentService : AccessibilityService() {
     private fun loop(task: String, cfg: Cfg) {
         var taskText = task
         extras.clear()
-        var nudges = 0; var lastHash = 0; var same = 0
+        var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false
         val turns = ArrayList<Turn>()
         val tools = tools()
         val hearth = cfg.hearth
         for (step in 1..60) {
-            while (true) { val x = extras.poll() ?: break; taskText += "\nUser then added: $x"; Bus.log("➕ $x") }
+            while (true) { val x = extras.poll() ?: break; taskText += "\nUser then added (INTERRUPT: update your to-do list with the plan tool to reflect this, then continue): $x"; Bus.log("➕ $x") }
             if (stopFlag) { Bus.log("■ Stopped"); return }
             val firstText = (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + "\n\n") + (if (notes.isEmpty()) "" else "Earlier this session:\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
@@ -291,13 +315,17 @@ class AgentService : AccessibilityService() {
             if (calls.isEmpty()) {
                 if (++nudges > 3) { Bus.log("■ Done"); return }
                 val nudge = "You must call a tool now: continue towards the goal, ask_user if unsure, or finish if the goal is verified done."
-                val ob = nudge + "\n" + observe()
+                val ob = nudge + "\n" + observe() + planText()
                 turns.add(Turn(content, emptyList(), emptyList(), JSONArray().put(text(ob)), raw, ob)); continue
             }
             val ids = ArrayList<String>(); val briefs = ArrayList<String>()
             for ((id, name, inp) in calls) {
                 if (stopFlag) { Bus.log("■ Stopped"); return }
                 Bus.log("→ $name $inp")
+                if (name == "finish" && !finishWarned && openTodos().isNotEmpty()) {
+                    finishWarned = true
+                    ids.add(id); briefs.add("Not finished: to-do items still open (" + openTodos().joinToString("; ") { it.text } + "). Complete them, or mark them done/skipped with the plan tool if they are no longer needed. Then finish."); continue
+                }
                 if (name == "finish") { val m = inp.optString("message"); Bus.log("✅ $m"); notes.add("\"$task\" → $m"); if (notes.size > 6) notes.removeAt(0); speak(m); return }
                 ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp))
             }
@@ -308,7 +336,7 @@ class AgentService : AccessibilityService() {
             if (h == lastHash) { same++; warn = "\n⚠ The screen did NOT change after your last action. Do not repeat it: pick a different element or approach." + if (same >= 2) " You are stuck: call ask_user now." else ""; if (!hearth) wantImage = true } else same = 0
             lastHash = h
             if (!hearth && nodes.size < 3) wantImage = true
-            val observation = briefs.last() + warn + "\n" + scr
+            val observation = briefs.last() + warn + "\n" + scr + planText()
             val o = JSONArray().put(text(observation))
             if (wantImage) { wantImage = false; if (!hearth) screenshotBlock()?.let { o.put(it) } }
             turns.add(Turn(content, ids, briefs, o, raw, observation))
@@ -350,6 +378,8 @@ class AgentService : AccessibilityService() {
         a.put(tool("key", "Press a system key.", JSONObject().put("key", JSONObject().put("type", "string").put("enum", JSONArray(listOf("back", "home", "recents", "notifications")))), listOf("key")))
         a.put(tool("wait", "Wait for the screen to load.", JSONObject().put("seconds", p("number"))))
         a.put(tool("screenshot", "Attach a screenshot to the next observation. Costly: use only when the element list is empty or insufficient (camera views, images, games).", JSONObject()))
+        val item = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string")).put("status", JSONObject().put("type", "string").put("enum", JSONArray(listOf("pending", "doing", "done", "skipped"))))).put("required", JSONArray(listOf("text", "status")))
+        a.put(tool("plan", "Create or replace your to-do list (3-8 short concrete steps, in order). Call it together with your next action, at the start of any multi-step task, whenever a step is done/started, and whenever the user changes the plan. Always send the full list.", JSONObject().put("items", JSONObject().put("type", "array").put("items", item)), listOf("items")))
         a.put(tool("ask_user", "Ask the user a short question out loud and wait for their spoken answer. Use when the request is unclear or doesn't match what's on screen, when several options fit (e.g. two contacts), when something unexpected blocks you (login, captcha, permission), or after two different approaches failed.", JSONObject().put("question", p("string")), listOf("question")))
         val f = tool("finish", "End the task ONLY when the goal is verified done on screen (or truly impossible). message = one short spoken sentence with the result.", JSONObject().put("message", p("string")), listOf("message"))
         f.put("cache_control", JSONObject().put("type", "ephemeral"))
@@ -384,6 +414,7 @@ class AgentService : AccessibilityService() {
                     if (performGlobalAction(a)) "ok" else "error: key failed"
                 }
                 "wait" -> { Thread.sleep((i.optDouble("seconds", 1.0).coerceIn(0.2, 10.0) * 1000).toLong()); "waited" }
+                "plan" -> setPlan(i.getJSONArray("items"))
                 "ask_user" -> askUser(i.getString("question"))
                 "screenshot" -> { wantImage = true; "screenshot attached below" }
                 else -> "error: unknown tool"
@@ -494,12 +525,13 @@ class AgentService : AccessibilityService() {
 private const val ESSENTIAL_SCAN = 250
 
 private const val RULES = """How to work (follow strictly):
+0. PLAN: at the start of any task with more than one step, call plan (together with your first action) with a short to-do list of 3-8 concrete steps. Your list is shown to you every turn. Whenever a step is done or you start the next, call plan again (in the same turn as your next action). Work through the list in order.
 1. Before EVERY action write 1-2 short sentences: GOAL (the end result you must reach), what you see now, whether your last action worked, and your next step. Never lose sight of the goal.
 2. After every action check the new screen: did it do what you intended? If not, try something different (other element, tap_xy, scroll, back, screenshot). Never repeat a failing action more than twice. Keep trying until the goal is reached; don't give up early.
 3. Finish only when the goal is verified done on screen (e.g. the message shows as sent). For multi-part requests do every part.
 4. Ask the user (ask_user) when the request is unclear or doesn't match what you see (e.g. contact not found, two matches, wrong app), when something unexpected blocks you (login, captcha, permission), or after two failed approaches. Ask short, concrete questions. Don't ask when the request is clear: just do it, without asking for confirmation.
 5. Be efficient: fewest steps. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
-6. The user may keep talking while you work. Lines "User then added: ..." are new instructions: follow them right away; they may add to, change or replace the task. "Earlier this session" lists previous commands for context.
+6. The user may interrupt while you work. Lines "User then added (INTERRUPT…): ..." are new instructions: first update the to-do list with plan (add, remove, reorder or replace steps as they ask), then continue with the updated list right away. "Earlier this session" lists previous commands for context.
 7. The user may speak Dutch; match app names as installed; write spoken messages (finish, ask_user) in the user's language.
 8. Names: the request comes from speech recognition, so names are often misspelled or misheard. Match names on screen approximately (ignore case/accents, similar sounds, first name only, partial text). Search with a short partial name rather than the full one. If exactly one plausible match: use it. If several or none: ask_user and read out the options.
 9. Do everything the user says: it is their own phone. Enter details they gave you."""
@@ -512,7 +544,7 @@ private const val SYSTEM_TEXT = """You control an Android phone to complete the 
 Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
 GOAL: send a snap to Anna. Snapchat isn't open yet. [{"tool":"open_app","name":"Snapchat"}]
 Tools:
-open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications} | wait{seconds} | ask_user{question} (asks the user out loud, returns their answer) | finish{message} (only when the goal is verified done)
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications} | wait{seconds} | plan{items:[{text,status: pending|doing|done|skipped}]} (your to-do list; send the full list) | ask_user{question} (asks the user out loud, returns their answer) | finish{message} (only when the goal is verified done)
 No screenshots are available.
 $RULES
 Always end your reply with the JSON array of actions."""

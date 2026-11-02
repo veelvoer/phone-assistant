@@ -47,6 +47,8 @@ class MainActivity : Activity() {
     private lateinit var key: EditText
     private lateinit var model: EditText
     private lateinit var keyHint: TextView
+    private lateinit var planCard: LinearLayout
+    private lateinit var planText: TextView
     private lateinit var names: EditText
     private lateinit var langBtns: List<Pair<String, Button>>
     private lateinit var logCard: LinearLayout
@@ -145,6 +147,19 @@ class MainActivity : Activity() {
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips); layoutParams = lp() },
             LinearLayout(this).apply { layoutParams = lp(top = 12); addView(mic); addView(runBtn) }
         ))
+
+        // plan card
+        planText = tv("", 14f, fg).apply { layoutParams = lp(top = 8) }
+        val planIn = input("Change the plan… (or just say it)")
+        planCard = cardView(
+            tv("Plan", 17f, fg, true), planText,
+            planIn.apply { layoutParams = lp(top = 10) },
+            button("Send change") {
+                val t = planIn.text.toString().trim()
+                if (t.isNotEmpty()) { AgentService.instance?.interrupt(t); planIn.setText("") }
+            }.apply { layoutParams = lp(top = 8) }
+        )
+        root.addView(planCard)
 
         // settings card
         segClaude = button("Claude API") { setProvider(false) }.apply { layoutParams = lp(0, -2, 0, 1f) }
@@ -245,6 +260,9 @@ class MainActivity : Activity() {
         }
         updateStatus.text = if (r == null) Updater.message else ""
 
+        val td = AgentService.todos
+        planCard.visibility = if (td.isEmpty()) View.GONE else View.VISIBLE
+        planText.text = td.joinToString("\n") { (when (it.status) { "done" -> "✓ "; "doing" -> "▶ "; "skipped" -> "– "; else -> "○ " }) + it.text }
         runBtn.text = if (running) "Stop" else "Run"
         runBtn.background = bgOf(if (running) danger else accent, 12)
 
