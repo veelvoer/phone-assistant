@@ -18,5 +18,8 @@ Download `phone-assistant.apk` from the latest [Release](../../releases/latest) 
 
 The key is sent only to api.anthropic.com. The service can see and act on everything on screen: use at your own risk.
 
+## Voice (Nothing Essential Key)
+Double-press and hold the Essential Key, say the task, and it runs. Needs the microphone permission (asked on first open). On Nothing phones the key also triggers Essential Space capture; turn that action off in Nothing's settings if it gets in the way.
+
 ## Updates
 The app checks GitHub releases and shows an **Update available** card; tap it to download and install. Releases are signed with a fixed key, so updates install over the old version (v1.1.0 and older must be uninstalled once).
