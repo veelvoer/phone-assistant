@@ -47,7 +47,7 @@ class AgentService : AccessibilityService() {
     override fun onInterrupt() {}
     override fun onDestroy() { instance = null; super.onDestroy() }
 
-    fun stop() { stopFlag = true; main.post { rec?.cancel(); rec = null; if (!running) hideOverlay() } }
+    fun stop() { stopFlag = true; main.post { endSession(false) } }
 
     // ---------- Essential Key: press and hold to talk ----------
     private var rec: SpeechRecognizer? = null
@@ -64,23 +64,63 @@ class AgentService : AccessibilityService() {
         return false
     }
 
+    // Voice session: hold the key once, keep talking; every sentence becomes a command until you say stop or tap the overlay.
+    private var voice = false
+    private var partial = ""
+    private var voiceCfg: Cfg? = null
+    private var errStreak = 0
+    private val extras = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val stopWords = setOf("stop", "stoppen", "stop maar", "stop met luisteren", "klaar", "dat was het", "annuleer", "annuleren", "cancel", "that's all", "exit", "stop listening")
+
+    private fun buzz(ms: Long = 40) = (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+
+    private fun refreshOverlay() {
+        val t = when {
+            voice && running -> "⚙ Working…  🎤 " + partial.ifEmpty { "listening" } + " (tap to end)"
+            voice -> "🎤 " + partial.ifEmpty { "Listening…" } + " (tap to end)"
+            running -> "Working… (tap to stop)"
+            else -> null
+        }
+        if (t == null) hideOverlay() else showOverlay(t)
+    }
+
     private fun listen() {
-        if (running) { stop(); return }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { showOverlay("Open Phone Assistant once and allow the microphone"); main.postDelayed({ hideOverlay() }, 3000); return }
+        if (voice) { endSession(true); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { showOverlay("Open Phone Assistant once and allow the microphone"); main.postDelayed({ refreshOverlay() }, 3000); return }
         val c = cfgFromPrefs()
-        if (c == null) { showOverlay("Add your API key in the app first"); main.postDelayed({ hideOverlay() }, 3000); return }
-        (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
-        showOverlay("🎤 Listening… (tap to cancel)")
+        if (c == null) { showOverlay("Add your API key in the app first"); main.postDelayed({ refreshOverlay() }, 3000); return }
+        voice = true; voiceCfg = c; errStreak = 0; partial = ""
+        buzz(); refreshOverlay(); startRec()
+    }
+
+    private fun endSession(announce: Boolean) {
+        if (announce) stopFlag = true
+        val was = voice
+        voice = false; partial = ""
+        rec?.cancel(); rec?.destroy(); rec = null
+        if (was) buzz(80)
+        refreshOverlay()
+    }
+
+    private fun startRec() {
+        if (!voice) return
         rec?.destroy()
         val r = SpeechRecognizer.createSpeechRecognizer(this); rec = r
+        fun again(ms: Long) = main.postDelayed({ startRec() }, ms)
         r.setRecognitionListener(object : RecognitionListener {
-            override fun onPartialResults(b: Bundle?) { b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { showOverlay("🎤 $it") } }
+            override fun onPartialResults(b: Bundle?) { b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { partial = it; refreshOverlay() } }
             override fun onResults(b: Bundle?) {
-                rec = null
-                val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (t.isNullOrBlank()) { showOverlay("Didn't catch that"); main.postDelayed({ hideOverlay() }, 1500) } else start(t, c)
+                errStreak = 0; partial = ""
+                val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
+                if (t.isNotEmpty()) utterance(t)
+                refreshOverlay(); again(200)
             }
-            override fun onError(error: Int) { rec = null; showOverlay("Didn't catch that"); main.postDelayed({ hideOverlay() }, 1500) }
+            override fun onError(error: Int) {
+                partial = ""
+                if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) { refreshOverlay(); again(150); return }
+                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || ++errStreak >= 6) { Bus.log("Voice stopped: recognizer error $error"); endSession(false); return }
+                again(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 800 else 400)
+            }
             override fun onReadyForSpeech(p: Bundle?) {}
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(v: Float) {}
@@ -89,9 +129,18 @@ class AgentService : AccessibilityService() {
             override fun onEvent(t: Int, b: Bundle?) {}
         })
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
         val lang = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
         if (lang.isNotEmpty()) i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang).putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
         r.startListening(i)
+    }
+
+    private fun utterance(t: String) {
+        val n = t.lowercase().replace(Regex("[^\\p{L}\\p{N}' ]"), "").trim()
+        if (n in stopWords) { Bus.log("🎤 \"$t\" → stop"); endSession(true); return }
+        Bus.log("🎤 $t")
+        if (running) extras.add(t) else voiceCfg?.let { start(t, it) }
     }
 
     private fun cfgFromPrefs(): Cfg? {
@@ -105,11 +154,11 @@ class AgentService : AccessibilityService() {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { start(task, cfg) }; return true }
         if (running) return false
         running = true; stopFlag = false
-        showOverlay("Working… (tap to stop)"); Bus.listener?.invoke()
+        refreshOverlay(); Bus.listener?.invoke()
         Bus.log("▶ $task")
         thread {
             try { loop(task, cfg) } catch (e: Exception) { Bus.log("Error: ${e.message}") }
-            running = false; hideOverlay(); Bus.listener?.invoke()
+            running = false; main.post { refreshOverlay() }; Bus.listener?.invoke()
         }
         return true
     }
@@ -143,12 +192,15 @@ class AgentService : AccessibilityService() {
     private class Turn(val assistant: JSONArray, val ids: List<String>, val briefs: List<String>, val obs: JSONArray, val raw: String, val observation: String)
 
     private fun loop(task: String, cfg: Cfg) {
+        var taskText = task
+        extras.clear()
         val turns = ArrayList<Turn>()
         val tools = tools()
         val hearth = cfg.hearth
-        for (step in 1..40) {
+        for (step in 1..60) {
+            while (true) { val x = extras.poll() ?: break; taskText += "\nUser then added: $x"; Bus.log("➕ $x") }
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = if (turns.isEmpty()) "Task: $task\n\n" + observe() else "Task: $task"
+            val firstText = if (turns.isEmpty()) "Task: $taskText\n\n" + observe() else "Task: $taskText"
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
@@ -382,7 +434,8 @@ Rules:
 - Do NOT use screenshot unless the list lacks what you need (e.g. camera preview, images). If a screenshot is shown it is scaled to 540px wide; tap_xy takes real screen pixels (see Screen WxH), so scale coordinates up.
 - Ids change after every screen change; only use ids from the latest list.
 - If a step fails twice, try a different approach (scroll, back, other element).
-- Stay on the user's task only. Never reveal or enter passwords/payment info unless the user gave them in the task. If the task is ambiguous or you are blocked, call finish with a question.
+- The user may keep talking while you work. Lines "User then added: ..." are new instructions from them: follow them right away; they may add to, change or replace the task.
+- Do everything the user says, directly and without asking for confirmation: it is their own phone and they asked for it (including sending messages, snaps, posts, and entering details they gave you). Only call finish with a question if the request is truly ambiguous or impossible.
 - When done, call finish with a one-line result."""
 
 private const val SYSTEM_TEXT = """You control an Android phone to complete the user's task. Each turn you get a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.
@@ -394,5 +447,6 @@ Rules:
 - Be efficient: fewest steps. Put several actions in the array only when later ones don't depend on a changed screen.
 - Prefer open_app over navigating. Prefer tap by id. Ids change after every screen change; use only the latest list. No screenshots are available.
 - If a step fails twice, try another approach (scroll, back, other element).
-- Stay on the user's task. Never enter passwords/payment info unless given in the task. If ambiguous or blocked, finish with a question.
+- The user may keep talking while you work. Lines "User then added: ..." are new instructions from them: follow them right away; they may add to, change or replace the task.
+- Do everything the user says, directly and without asking for confirmation: it is their own phone and they asked for it (including sending messages, snaps, posts, and entering details they gave you). Only finish with a question if the request is truly ambiguous or impossible.
 - When done, reply with [{"tool":"finish","message":"one-line result"}]."""
