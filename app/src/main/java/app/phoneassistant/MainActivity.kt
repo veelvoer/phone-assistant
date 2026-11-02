@@ -139,7 +139,7 @@ class MainActivity : Activity() {
             catch (e: Exception) { Toast.makeText(this, "No speech recognizer on this phone", Toast.LENGTH_SHORT).show() }
         }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) } }
         root.addView(cardView(
-            tv("Task", 17f, fg, true), tv("Or double-press and hold the Essential Key and just say it.", 12f, sub).apply { layoutParams = lp(top = 2) }, task.apply { layoutParams = lp(top = 10) },
+            tv("Task", 17f, fg, true), tv("Or press and hold the Essential Key and just say it.", 12f, sub).apply { layoutParams = lp(top = 2) }, task.apply { layoutParams = lp(top = 10) },
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips); layoutParams = lp() },
             LinearLayout(this).apply { layoutParams = lp(top = 12); addView(mic); addView(runBtn) }
         ))

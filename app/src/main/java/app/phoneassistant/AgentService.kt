@@ -49,24 +49,19 @@ class AgentService : AccessibilityService() {
 
     fun stop() { stopFlag = true; main.post { rec?.cancel(); rec = null; if (!running) hideOverlay() } }
 
-    // ---------- Essential Key: double-press and hold to talk ----------
+    // ---------- Essential Key: press and hold to talk ----------
     private var rec: SpeechRecognizer? = null
-    private var lastUp = 0L
-    private var second = false
     private var held: Runnable? = null
 
     override fun onKeyEvent(e: KeyEvent): Boolean {
         if (e.scanCode != ESSENTIAL_SCAN) return false
-        if (e.action == KeyEvent.ACTION_DOWN) {
-            if (e.repeatCount > 0) return true
-            second = lastUp > 0 && e.eventTime - lastUp < 500
-            if (second) { held = Runnable { held = null; lastUp = 0; listen() }; main.postDelayed(held!!, 450) }
+        if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
+            held?.let { main.removeCallbacks(it) }
+            held = Runnable { held = null; listen() }; main.postDelayed(held!!, 450)
         } else if (e.action == KeyEvent.ACTION_UP) {
             held?.let { main.removeCallbacks(it); held = null }
-            lastUp = if (second) 0 else e.eventTime
-            second = false
         }
-        return true   // swallow every Essential Key event so Nothing's own capture doesn't fire
+        return false
     }
 
     private fun listen() {
