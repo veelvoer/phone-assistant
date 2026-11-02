@@ -217,7 +217,7 @@ class AgentService : AccessibilityService() {
         if (n in stopWords) { Bus.log("🎤 \"$t\" → stop"); endSession(true); return }
         Bus.log("🎤 $t")
         if (asking) { answers.put(t); return }
-        if (running) extras.add(t) else voiceCfg?.let { start(t, it) }
+        if (running || voiceCfg?.let { start(t, it) } != true) { extras.add(t); Bus.log("➕ queued: $t") }
     }
 
     private fun cfgFromPrefs(): Cfg? {
@@ -236,7 +236,13 @@ class AgentService : AccessibilityService() {
         Bus.log("▶ $task")
         thread {
             try { loop(task, cfg, cont) } catch (e: Exception) { Bus.log("Error: ${e.message}") }
-            running = false; main.post { refreshOverlay() }; Bus.listener?.invoke()
+            running = false; Bus.listener?.invoke()
+            main.post {
+                refreshOverlay()
+                // instructions spoken while the run was ending must not get lost
+                val rest = ArrayList<String>(); while (true) rest.add(extras.poll() ?: break)
+                if (rest.isNotEmpty() && voice && !stopFlag) start(rest.joinToString(". "), cfg)
+            }
         }
         return true
     }
@@ -332,6 +338,9 @@ class AgentService : AccessibilityService() {
             for ((id, name, inp) in calls) {
                 if (stopFlag) { Bus.log("■ Stopped"); return }
                 Bus.log("→ $name $inp")
+                if (name == "finish" && extras.isNotEmpty()) {
+                    ids.add(id); briefs.add("NOT finished: the user just gave new instructions (see Task below). Do them first, then finish."); continue
+                }
                 if (name == "finish" && !finishWarned && openTodos().isNotEmpty()) {
                     finishWarned = true
                     ids.add(id); briefs.add("Not finished: to-do items still open (" + openTodos().joinToString("; ") { it.text } + "). Complete them, or mark them done/skipped with the plan tool if they are no longer needed. Then finish."); continue
