@@ -55,6 +55,7 @@ class MainActivity : Activity() {
     private lateinit var usageText: TextView
     private lateinit var usageCard: LinearLayout
     private lateinit var smartBtn: Button
+    private lateinit var speakBtn: Button
     private lateinit var langBtns: List<Pair<String, Button>>
     private lateinit var logCard: LinearLayout
     private lateinit var log: TextView
@@ -191,6 +192,7 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; setText(p.getString("facts", "")) }
         balance = input("Credit balance in $ (optional)").apply { layoutParams = lp(top = 6); inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             Usage.left(this@MainActivity)?.let { setText(String.format(java.util.Locale.US, "%.2f", it)) } }
+        speakBtn = button("") { p.edit().putBoolean("speak", !p.getBoolean("speak", true)).apply(); render() }.apply { layoutParams = lp(top = 6) }
         smartBtn = button("") { p.edit().putBoolean("smartplan", !p.getBoolean("smartplan", true)).apply(); render() }.apply { layoutParams = lp(top = 6) }
         val modelChips = LinearLayout(this).apply {
             layoutParams = lp(top = 6)
@@ -208,7 +210,7 @@ class MainActivity : Activity() {
             addView(url); addView(key); addView(model); addView(modelChips); addView(keyHint)
             addView(tv("Memory: who you are, family, friends", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(memory)
             addView(tv("One short fact per line. The assistant also adds facts itself, and you can say “onthoud dat mijn moeder Anna heet” (instant and free).", 12f, sub).apply { layoutParams = lp(top = 4) })
-            addView(smartBtn)
+            addView(smartBtn); addView(speakBtn)
             addView(tv("Credit balance", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(balance)
             addView(tv("Anthropic doesn't let apps read your balance. Enter it once (console.anthropic.com → Billing) and the app subtracts what it spends.", 12f, sub).apply { layoutParams = lp(top = 4) })
             addView(tv("Voice language", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(langRow)
@@ -307,6 +309,7 @@ class MainActivity : Activity() {
         key.hint = if (hearth) "Hearth API key" else "Claude API key (sk-ant-…)"
         keyHint.text = if (hearth) "Don't have a Claude key? Use your Hearth server: model haiku, sonnet or opus. Text-only, so no screenshots." else "Get a key at console.anthropic.com. Haiku is cheapest and fastest."
 
+        speakBtn.text = if (p.getBoolean("speak", true)) "✓ Spoken answers (silent during calls)" else "Spoken answers off (tap to turn on)"
         smartBtn.text = if (p.getBoolean("smartplan", true)) "✓ Smart planning: Sonnet plans, Haiku executes" else "Smart planning off (tap to turn on)"
         val left = Usage.left(this)
         usageText.text = (if (left != null) "Credits left ≈ ${Usage.money(left.toDouble())}\n" else "") +

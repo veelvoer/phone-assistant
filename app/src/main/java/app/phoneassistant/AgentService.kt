@@ -61,13 +61,40 @@ class AgentService : AccessibilityService() {
     @Volatile private var resultUntil = 0L
     private var wantImage = false
 
+    private val audio by lazy { getSystemService(AUDIO_SERVICE) as android.media.AudioManager }
+    private var focusReq: android.media.AudioFocusRequest? = null
+
+    /** A phone/VoIP call is ringing or active: the assistant must be silent and gone. */
+    private fun inCall(): Boolean = audio.mode.let { it == android.media.AudioManager.MODE_IN_CALL || it == android.media.AudioManager.MODE_IN_COMMUNICATION || it == android.media.AudioManager.MODE_RINGTONE || it == android.media.AudioManager.MODE_CALL_SCREENING }
+
+    private val callWatch = object : Runnable {
+        override fun run() {
+            if ((voice || speaking || running || ov != null) && inCall()) {
+                Bus.log("📞 call detected: assistant stopped")
+                tts?.stop(); speaking = false; abandonFocus()
+                stopFlag = true; endSession(true); hideOverlay()
+            }
+            main.postDelayed(this, 800)
+        }
+    }
+
+    private fun takeFocus() {
+        val r = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANT).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setOnAudioFocusChangeListener { c -> if (c == android.media.AudioManager.AUDIOFOCUS_LOSS || c == android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) main.post { tts?.stop(); speaking = false; if (voice) startRec() } }.build()
+        focusReq = r; audio.requestAudioFocus(r)
+    }
+
+    private fun abandonFocus() { focusReq?.let { audio.abandonAudioFocusRequest(it) }; focusReq = null }
+
     override fun onServiceConnected() {
         instance = this
+        main.removeCallbacks(callWatch); main.postDelayed(callWatch, 800)
         tts = TextToSpeech(this) { ttsReady = it == TextToSpeech.SUCCESS }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {}
-            override fun onDone(id: String?) { main.post { speaking = false; if (voice) startRec() } }
-            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; if (voice) startRec() } }
+            override fun onDone(id: String?) { main.post { speaking = false; abandonFocus(); if (voice) startRec() } }
+            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; abandonFocus(); if (voice) startRec() } }
         })
     }
     @Volatile private var lastEvent = 0L
@@ -147,6 +174,7 @@ class AgentService : AccessibilityService() {
 
     private fun listen() {
         if (voice) { endSession(true); return }
+        if (inCall()) return   // never wake up during a call
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { showOverlay("Open Phone Assistant once and allow the microphone"); main.postDelayed({ refreshOverlay() }, 3000); return }
         val c = cfgFromPrefs()
         if (c == null) { showOverlay("Add your API key in the app first"); main.postDelayed({ refreshOverlay() }, 3000); return }
@@ -173,7 +201,7 @@ class AgentService : AccessibilityService() {
             override fun onPartialResults(b: Bundle?) { b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { partial = it; refreshOverlay() } }
             override fun onResults(b: Bundle?) {
                 errStreak = 0; partial = ""
-                val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
+                val t = bestHeard(b)
                 if (t.isNotEmpty()) utterance(t)
                 refreshOverlay(); again(200)
             }
@@ -190,7 +218,7 @@ class AgentService : AccessibilityService() {
             override fun onEndOfSpeech() {}
             override fun onEvent(t: Int, b: Bundle?) {}
         })
-        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true).putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
         val lang = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
@@ -228,15 +256,28 @@ class AgentService : AccessibilityService() {
 
     private fun langTag() = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
 
+    private fun bestVoice(e: TextToSpeech, loc: Locale): android.speech.tts.Voice? {
+        val online = (getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).activeNetwork != null
+        return try {
+            e.voices.orEmpty().filter { it.locale.language == loc.language && !it.features.orEmpty().contains("notInstalled") && (online || !it.isNetworkConnectionRequired) }
+                .sortedWith(compareByDescending<android.speech.tts.Voice> { it.locale.country == loc.country || loc.country.isEmpty() }.thenByDescending { it.quality }.thenByDescending { it.latency * -1 }).firstOrNull()
+        } catch (x: Exception) { null }
+    }
+
     private fun speak(t: String) = main.post {
         val e = tts ?: return@post
-        if (!ttsReady || t.isBlank()) return@post
+        if (!ttsReady || t.isBlank() || inCall() || !getSharedPreferences("p", MODE_PRIVATE).getBoolean("speak", true)) return@post
         speaking = true; rec?.cancel(); rec?.destroy(); rec = null
-        val tag = langTag(); e.language = if (tag.isEmpty()) Locale.getDefault() else Locale.forLanguageTag(tag)
+        val tag = langTag(); val loc = if (tag.isEmpty()) Locale.getDefault() else Locale.forLanguageTag(tag)
+        e.language = loc
+        bestVoice(e, loc)?.let { e.voice = it }
+        e.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANT).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+        e.setSpeechRate(1.05f); e.setPitch(1.0f)
+        takeFocus()
         val txt = t.take(600)
-        if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, null, "u") != TextToSpeech.SUCCESS) { speaking = false; if (voice) startRec(); return@post }
+        if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, null, "u") != TextToSpeech.SUCCESS) { speaking = false; abandonFocus(); if (voice) startRec(); return@post }
         // never stay deaf if the "done" callback gets lost
-        main.postDelayed({ if (speaking) { speaking = false; if (voice) startRec() } }, 2000L + txt.length * 90L)
+        main.postDelayed({ if (speaking) { speaking = false; abandonFocus(); if (voice) startRec() } }, 2000L + txt.length * 90L)
     }
 
     /** Blocks the agent thread until the user answers by voice. */
@@ -253,6 +294,20 @@ class AgentService : AccessibilityService() {
         }
         main.post { asking = false; if (tempVoice) endSession(false) else refreshOverlay() }
         return if (stopFlag) "error: stopped" else "error: user did not answer. Make your best guess or finish."
+    }
+
+    /** Of the recogniser's alternatives pick the one that contains the most names/words the user is known to use. */
+    private fun bestHeard(b: Bundle?): String {
+        val list = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: return ""
+        val conf = b.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
+        val known = names().map { norm(it) }.filter { it.length >= 3 }
+        var best = ""; var bs = -1f
+        list.forEachIndexed { i, c ->
+            val n = norm(c)
+            val sc = known.count { n.contains(it) } * 2f + (conf?.getOrNull(i) ?: (1f - i * 0.05f))
+            if (sc > bs) { bs = sc; best = c }
+        }
+        return best.trim()
     }
 
     private fun utterance(t: String) {
