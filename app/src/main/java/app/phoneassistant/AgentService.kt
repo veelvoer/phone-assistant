@@ -378,7 +378,7 @@ class AgentService : AccessibilityService() {
         if (cont && turns.isNotEmpty()) { val ob = "The user sent a follow-up (see Task).\n" + observe() + planText(); turns.last().obs = JSONArray().put(text(ob)); turns.last().observation = ob }
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false; var evWarned = false
         var model = cfg.model; var noThinking = false; var stall = 0; var lastDone = 0
-        val escalate = { why: String -> if (!cfg.hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ $why: switching to a stronger model for this task") } }
+        val escalate = { why: String -> if (!cfg.hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; noThinking = true; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ $why: switching to a stronger model for this task") } }
         val smartPlan = getSharedPreferences("p", MODE_PRIVATE).getBoolean("smartplan", true)
         val tools = tools()
         val hearth = cfg.hearth
@@ -817,14 +817,15 @@ class AgentService : AccessibilityService() {
 
     /** Live lookup of the best element for a text, in every app window. */
     private fun locate(q: String): AccessibilityNodeInfo? {
-        val nq = norm(q); if (nq.length < 2) return null
+        val nq = norm(q); if (nq.isEmpty()) return null
+        val minScore = if (nq.length < 2) 3 else 1   // single characters (digits) must match exactly
         var best: AccessibilityNodeInfo? = null; var bs = 0; var bl = 0
         fun walk(n: AccessibilityNodeInfo) {
             if (!n.isVisibleToUser) return
             val t = norm(((n.text ?: n.contentDescription) ?: "").toString())
             if (t.isNotEmpty()) {
                 val sc = if (t == nq) 3 else if (t.startsWith(nq)) 2 else if (t.contains(nq)) 1 else 0
-                if (sc > bs || (sc == bs && sc > 0 && t.length < bl)) { best = n; bs = sc; bl = t.length }
+                if (sc >= minScore && (sc > bs || (sc == bs && sc > 0 && t.length < bl))) { best = n; bs = sc; bl = t.length }
             }
             for (k in 0 until n.childCount) n.getChild(k)?.let { walk(it) }
         }
