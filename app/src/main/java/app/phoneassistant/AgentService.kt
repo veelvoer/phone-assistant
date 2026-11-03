@@ -45,6 +45,7 @@ class AgentService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
     private val plainClasses = setOf("TextView", "View", "ViewGroup", "FrameLayout", "LinearLayout", "RelativeLayout", "ConstraintLayout", "LinearLayoutCompat")
+    @Volatile private var scrollStreak = 0
     private val nodes = ArrayList<AccessibilityNodeInfo>()
     private val rects = ArrayList<Rect>()
     @Volatile var running = false; private set
@@ -464,6 +465,7 @@ class AgentService : AccessibilityService() {
                     turns.add(Turn(content, ids, briefs, JSONArray().put(text("Finished. Waiting for the user's next message.")), raw, "Finished."))
                     return
                 }
+                if (name != "scroll") scrollStreak = 0
                 val dsc = describe(name, inp)
                 statusLine = friendly(name, inp, dsc); refreshOverlay()
                 ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp)); if (dsc.isNotBlank()) runDid.add(dsc)
@@ -540,7 +542,7 @@ class AgentService : AccessibilityService() {
         a.put(tool("wait", "Wait for the screen to load.", JSONObject().put("seconds", p("number"))))
         a.put(tool("screenshot", "Attach a screenshot to the next observation. Costly: use only when the element list is empty or insufficient (camera views, images, games).", JSONObject()))
         val item = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string")).put("status", JSONObject().put("type", "string").put("enum", JSONArray(listOf("pending", "doing", "done", "skipped"))))).put("required", JSONArray(listOf("text", "status")))
-        a.put(tool("plan", "Set your GOAL and to-do list. Call it FIRST in every task (it is forced on your first turn), and again whenever a step is done/started or the user changes the task. Always send everything.", JSONObject().put("goal", p("string", "the concrete end result the user wants, one sentence")).put("done_when", p("string", "what exactly must be visible/true on screen to prove the goal is reached")).put("items", JSONObject().put("type", "array").put("items", item)), listOf("goal", "done_when", "items")))
+        a.put(tool("plan", "Set your GOAL and to-do list. Call it FIRST in every task (it is forced on your first turn), and again whenever a step is done/started or the user changes the task. Always send everything.", JSONObject().put("screen_now", p("string", "FIRST look at the screen list: what app and screen is this, and what on it matters for the task? one or two sentences")).put("goal", p("string", "the concrete end result the user wants, one sentence")).put("done_when", p("string", "what exactly must be visible/true on screen to prove the goal is reached")).put("items", JSONObject().put("type", "array").put("items", item)), listOf("screen_now", "goal", "done_when", "items")))
         val hi = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string", "visible text of the element, located live")).put("substring", p("string", "exact piece of the text to box only that part")).put("id", p("integer", "element id from the latest list")).put("x", p("integer")).put("y", p("integer")).put("w", p("integer")).put("h", p("integer")).put("label", p("string", "short note shown next to it")))
         a.put(tool("highlight", "Show the user something on their screen: dims the screen and outlines exactly the thing, with an optional label. Use it for 'show me / where is / which one / point out / find' requests or to point at an answer (price, button, message). Each item: text = the visible text of the element (best: located live, always accurate), plus substring = an exact piece of a long text to box only that part (e.g. a price or a name inside a paragraph); or id from the latest list; or raw pixels x,y,w,h. A screenshot is attached afterwards: check the outline, redo if off. Then finish with a short spoken explanation.", JSONObject().put("items", JSONObject().put("type", "array").put("items", hi)).put("seconds", p("integer", "how long to keep it, default 10")), listOf("items")))
         a.put(tool("tap_labels", "Tap several elements in order by their exact visible label/description, resolved live. Use for ANY sequence of buttons: calculator digits and operators (e.g. [\"1\",\"2\",\"multiply\",\"5\",\"equals\"]), keypads, dialers, PIN pads. Far more reliable than tapping ids one by one.", JSONObject().put("labels", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("labels")))
@@ -569,12 +571,16 @@ class AgentService : AccessibilityService() {
                 "type" -> typeText(i.getString("text"), if (i.has("id")) i.getInt("id") else null, i.optBoolean("submit"))
                 "scroll" -> {
                     val m = resources.displayMetrics; val w = m.widthPixels; val h = m.heightPixels
-                    when (i.getString("direction")) {
+                    if (++scrollStreak > 3) return "error: you scrolled $scrollStreak times in a row without acting. STOP scrolling: re-read the list, say what the screen is and where the target should be, then use a search field, another tab/screen, find_tap or ask_user."
+                    val before = sig()
+                    val r0 = when (i.getString("direction")) {
                         "down" -> swipe(w / 2, h * 7 / 10, w / 2, h * 3 / 10, 300)
                         "up" -> swipe(w / 2, h * 3 / 10, w / 2, h * 7 / 10, 300)
                         "right" -> swipe(w * 8 / 10, h / 2, w * 2 / 10, h / 2, 300)
                         else -> swipe(w * 2 / 10, h / 2, w * 8 / 10, h / 2, 300)
                     }
+                    settle()
+                    if (r0 == "ok" && sig() == before) "scrolled but the screen did not change: this is the end of the list (or nothing scrolls here)" else r0
                 }
                 "swipe" -> swipe(i.getInt("x1"), i.getInt("y1"), i.getInt("x2"), i.getInt("y2"), i.optInt("ms", 300))
                 "key" -> {
@@ -609,6 +615,7 @@ class AgentService : AccessibilityService() {
                 "remember" -> remember(i.getString("fact"))
                 "forget" -> forget(i.getString("text"))
                 "plan" -> {
+                    if (i.optString("screen_now").isNotBlank()) Bus.log("👁 " + i.optString("screen_now"))
                     if (i.optString("goal").isNotBlank()) goal = i.optString("goal").take(240)
                     if (i.optString("done_when").isNotBlank()) doneWhen = i.optString("done_when").take(240)
                     if (goal.isNotEmpty()) Bus.log("🎯 $goal" + if (doneWhen.isNotEmpty()) "  ✔ $doneWhen" else "")
@@ -787,7 +794,7 @@ class AgentService : AccessibilityService() {
         val nq = norm(q)
         if (nq.length < 2) return "error: text too short"
         val m = resources.displayMetrics; val w = m.widthPixels; val h = m.heightPixels
-        for (attempt in 0..11) {
+        for (attempt in 0..3) {
             if (stopFlag) return "stopped"
             var best: AccessibilityNodeInfo? = null; var bs = 0; var bl = 0; var count = 0
             fun walk(n: AccessibilityNodeInfo) {
@@ -808,12 +815,11 @@ class AgentService : AccessibilityService() {
                 val r0 = tapNode(hit, null)
                 return (if (r0.startsWith("error")) r0 else "tapped \"$label\"" + r0.removePrefix("tapped")) + if (count > 1) " (${count - 1} other matches on screen)" else ""
             }
-            if (attempt == 11) break
-            if (attempt < 6) swipe(w / 2, h * 7 / 10, w / 2, h * 3 / 10, 300)      // look further down first
-            else { if (attempt == 6) repeat(5) { swipe(w / 2, h * 3 / 10, w / 2, h * 7 / 10, 250); Thread.sleep(250) }; swipe(w / 2, h * 3 / 10, w / 2, h * 7 / 10, 300) }   // then back up and above the start
+            if (attempt == 3 || !anyScrollable()) break      // nothing to scroll (or enough looking): report back instead of scrolling blindly
+            swipe(w / 2, h * 7 / 10, w / 2, h * 3 / 10, 300)
             settle()
         }
-        return "error: \"$q\" not found on screen or after scrolling (try other wording, a screenshot, or ask_user)"
+        return "error: \"$q\" not found on this screen" + (if (anyScrollable()) " nor in the next 3 pages down" else "") + ". Look at the screen list again: use a search field, another tab/screen, other wording, a screenshot or ask_user."
     }
 
     /** Live lookup of the best element for a text, in every app window. */
@@ -908,6 +914,17 @@ class AgentService : AccessibilityService() {
         return "tapped ${ok.size}/${arr.length()}: ${ok.joinToString(" ")}" + if (miss.isEmpty()) "" else "; NOT FOUND: " + miss.joinToString(", ") + " (use the exact label from the list)"
     }
 
+    private fun anyScrollable(): Boolean {
+        var found = false
+        fun walk(n: AccessibilityNodeInfo) {
+            if (found || !n.isVisibleToUser) return
+            if (n.isScrollable) { found = true; return }
+            for (k in 0 until n.childCount) n.getChild(k)?.let { walk(it) }
+        }
+        for (win in windows) if (win.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) win.root?.let { if (it.packageName != packageName) walk(it) }
+        return found
+    }
+
     private fun readScreen(): String {
         val sb = StringBuilder(); var last = ""
         fun walk(n: AccessibilityNodeInfo) {
@@ -942,6 +959,7 @@ class AgentService : AccessibilityService() {
 private const val ESSENTIAL_SCAN = 250
 
 private const val RULES = """How to work (follow strictly):
+0a. LOOK FIRST. Before every decision read the screen list: which app and screen is this, what is on it, is the target already visible? Say it in "why". Only act on what you actually see. Never scroll or swipe as a first reaction: if the target is not in the list, think where it should be (a search field/icon, a menu, another tab, a different screen, a link via open_url, find_tap) and use that; scroll at most 2-3 times in a row, each time re-reading the new list, and stop as soon as the end of the list is reached.
 0. GOAL FIRST. Your first action is always plan: goal = the concrete end result the user wants (one sentence), done_when = what exactly must be visible/true on screen to prove it, items = 2-8 steps. The goal and your list are shown to you every turn. Everything you do must serve the goal: use every tool and trick available (find_tap, open_url, search, scroll, back, ask_user, screenshot...) until the goal is reached. Never stop at a partial result, never say you cannot without trying at least three different approaches. Whenever a step is done, call plan again in the same turn as your next action. Every tool has a "why" field: use it for one short sentence on how the action serves the goal.
 1. Before EVERY action write 1-2 short sentences: GOAL (the end result you must reach), what you see now, whether your last action worked, and your next step. Never lose sight of the goal.
 2. After every action check the new screen: did it do what you intended? If not, try something different (other element, tap_xy, scroll, back, screenshot). Never repeat a failing action more than twice. Keep trying until the goal is reached; don't give up early.
@@ -967,7 +985,7 @@ private const val SYSTEM_TEXT = """You control an Android phone to complete the 
 Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
 GOAL: send a snap to Anna. Snapchat isn't open yet. [{"tool":"open_app","name":"Snapchat"}]
 Tools:
-open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | tap_labels{labels:[...]} (tap a sequence of buttons by label: digits, keypads) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | forget{text} | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{screen_now,goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | tap_labels{labels:[...]} (tap a sequence of buttons by label: digits, keypads) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | forget{text} | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
 No screenshots are available.
 $RULES
 Always end your reply with the JSON array of actions."""
