@@ -24,6 +24,11 @@ const script = [
 ];
 let n = 0;
 const fetchImpl = async (url, opt) => { const body = JSON.parse(opt.body); calls.push(body); const r = script[n++](body); return { ok: true, status: 200, text: async () => JSON.stringify({ ...r, usage: { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 4000 } }) }; };
+// renderer scripts: syntax + no top-level binding that clashes with the preload's window.api (this once silently killed the whole UI)
+for (const f of fs.readdirSync(path.join(__dirname, '../src/renderer')).filter((x) => x.endsWith('.js'))) {
+  const src = fs.readFileSync(path.join(__dirname, '../src/renderer', f), 'utf8'); new Function(src);
+  assert.ok(!/^(const|let|var|class)\s+api\b/m.test(src), f + ' declares a global "api"');
+}
 (async () => {
   const cfg = new Config(path.join(os.tmpdir(), 'as-test-' + process.pid + '.json')); cfg.set({ apiKey: 'sk-test', facts: 'mom = Anna Peeters' });
   const usage = new Usage(cfg); const spoke = []; const logs = [];
