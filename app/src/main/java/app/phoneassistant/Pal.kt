@@ -8,7 +8,7 @@ import android.util.TypedValue
 
 /** Colors taken from the system (Material You / wallpaper colors on Android 12+, theme accent below that). */
 @SuppressLint("NewApi")
-class Pal(c: Context) {
+class Pal(private val c: Context) {
     val night = c.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     private val base: Int = TypedValue().let { tv -> if (c.theme.resolveAttribute(android.R.attr.colorAccent, tv, true)) tv.data else 0xFF6750A4.toInt() }
     private fun sys(res: Int, fb: Int) = if (Build.VERSION.SDK_INT >= 31) c.getColor(res) else fb
