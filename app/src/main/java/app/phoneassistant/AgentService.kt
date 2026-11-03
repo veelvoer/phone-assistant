@@ -181,6 +181,43 @@ class AgentService : AccessibilityService() {
         }
     }
 
+    // Voice session: hold the key once, keep talking; every sentence becomes a command until you say stop or tap the overlay.
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    @Volatile private var speaking = false
+    private var voice = false
+    private var tempVoice = false
+    @Volatile private var asking = false
+    private var question = ""
+    private val answers = java.util.concurrent.LinkedBlockingQueue<String>()
+    private val notes = ArrayList<String>()   // earlier commands + results this session
+    private var partial = ""
+    private var voiceCfg: Cfg? = null
+    private var errStreak = 0
+    private val extras = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val stopWords = setOf("stop", "stoppen", "stop maar", "stop met luisteren", "klaar", "dat was het", "annuleer", "annuleren", "cancel", "that's all", "exit", "stop listening")
+
+    private fun buzz(ms: Long = 40) = (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+
+    private fun refreshOverlay() = main.post {
+        val cur = todos.firstOrNull { it.status == "doing" } ?: todos.firstOrNull { it.status == "pending" }
+        val planSub = cur?.let { "${todos.count { t -> t.status == "done" } + 1}/${todos.size} · ${it.text}" }
+        val prog = if (todos.isEmpty()) 0f else (todos.count { it.status == "done" } + 0.3f) / todos.size
+        val fresh = System.currentTimeMillis() < resultUntil
+        val o = ov()
+        when {
+            asking -> o.update(Overlay.State.ASKING, "Question", question, if (voice) partial.ifEmpty { "Say your answer…" } else null, 0f)
+            running -> o.update(Overlay.State.WORKING, if (voice) "Working · listening" else "Working", statusLine.ifEmpty { "Thinking…" },
+                if (voice && partial.isNotEmpty()) "🎤 $partial" else planSub ?: if (voice) "Say something to add or change" else null, prog)
+            voice -> o.update(Overlay.State.LISTENING, if (fresh) "Done" else "Listening", if (partial.isNotEmpty()) partial else if (fresh) resultText else "Say what I should do…", if (fresh) "Listening for your next command" else null, 0f)
+            fresh -> o.update(Overlay.State.INFO, "Done", resultText, null, 0f)
+            else -> { ov?.hide(); ov = null }
+        }
+    }
+
+    private fun showResult(m: String) { resultText = m; resultUntil = System.currentTimeMillis() + 4500; refreshOverlay(); main.postDelayed({ refreshOverlay() }, 4600) }
+
+
     /** Quick Settings tile / app: start or stop the voice session. */
     fun toggleFromUi(closeShade: Boolean) { main.post { if (closeShade) { performGlobalAction(GLOBAL_ACTION_BACK); main.postDelayed({ listen() }, 350) } else listen() } }
 
