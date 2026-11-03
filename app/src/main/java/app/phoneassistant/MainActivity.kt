@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     private lateinit var planCard: LinearLayout
     private lateinit var planText: TextView
     private lateinit var names: EditText
+    private lateinit var memory: EditText
     private lateinit var balance: EditText
     private lateinit var usageText: TextView
     private lateinit var usageCard: LinearLayout
@@ -186,6 +187,8 @@ class MainActivity : Activity() {
             langBtns.forEachIndexed { i, (_, b) -> if (i > 0) addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(b) }
         }
         names = input("Names & words you use, comma separated (friends, places…)").apply { layoutParams = lp(top = 6); setText(p.getString("names", "")) }
+        memory = input("e.g.\nI am Warre\nmom = Anna Peeters\nbrother = Lars (Snapchat: lars_v)").apply { layoutParams = lp(top = 6); minLines = 4; gravity = Gravity.TOP
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; setText(p.getString("facts", "")) }
         balance = input("Credit balance in $ (optional)").apply { layoutParams = lp(top = 6); inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             Usage.left(this@MainActivity)?.let { setText(String.format(java.util.Locale.US, "%.2f", it)) } }
         smartBtn = button("") { p.edit().putBoolean("smartplan", !p.getBoolean("smartplan", true)).apply(); render() }.apply { layoutParams = lp(top = 6) }
@@ -203,6 +206,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL; layoutParams = lp(top = 12)
             addView(LinearLayout(this@MainActivity).apply { addView(segClaude); addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(segHearth) })
             addView(url); addView(key); addView(model); addView(modelChips); addView(keyHint)
+            addView(tv("Memory: who you are, family, friends", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(memory)
+            addView(tv("One short fact per line. The assistant also adds facts itself, and you can say “onthoud dat mijn moeder Anna heet” (instant and free).", 12f, sub).apply { layoutParams = lp(top = 4) })
             addView(smartBtn)
             addView(tv("Credit balance", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(balance)
             addView(tv("Anthropic doesn't let apps read your balance. Enter it once (console.anthropic.com → Billing) and the app subtracts what it spends.", 12f, sub).apply { layoutParams = lp(top = 4) })
@@ -246,7 +251,7 @@ class MainActivity : Activity() {
 
     private fun saveProvider() {
         p.edit().putBoolean("hearth", hearth).putString(if (hearth) "key_h" else "key", key.text.toString().trim())
-            .putString(if (hearth) "model_h" else "model", model.text.toString().trim()).putString("url", url.text.toString().trim()).putString("names", names.text.toString().trim()).apply()
+            .putString(if (hearth) "model_h" else "model", model.text.toString().trim()).putString("url", url.text.toString().trim()).putString("names", names.text.toString().trim()).putString("facts", memory.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")).apply()
         balance.text.toString().trim().toFloatOrNull()?.let { v -> if (kotlin.math.abs(v - (Usage.left(this) ?: -1f)) > 0.004f) Usage.setBalance(this, v) }
     }
 
@@ -321,6 +326,7 @@ class MainActivity : Activity() {
         super.onResume()
         Bus.listener = { runOnUiThread { render() } }
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 2)
+        if (!memory.hasFocus()) memory.setText(p.getString("facts", ""))
         render(); Updater.check(this)
     }
 
