@@ -25,7 +25,8 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
     private fun dp(v: Float) = v * d
     private fun dpi(v: Float) = (v * d).toInt()
 
-    private val colors = intArrayOf(0xFF4285F4.toInt(), 0xFF9B72CB.toInt(), 0xFFD96570.toInt(), 0xFFF4B400.toInt(), 0xFF34A853.toInt(), 0xFF4285F4.toInt())
+    private val pal = Pal(ctx)
+    private val colors = intArrayOf(pal.a400, pal.a200, pal.a600, pal.a300, pal.a400)
 
     private var glow: Glow? = null
     private var card: LinearLayout? = null
@@ -78,9 +79,9 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
             PixelFormat.TRANSLUCENT))
 
         val w = Wave(ctx).also { wave = it }
-        val t1 = TextView(ctx).apply { textSize = 11f; setTextColor(0xFF9AA0A6.toInt()); letterSpacing = 0.06f; isAllCaps = true }.also { title = it }
-        val t2 = TextView(ctx).apply { textSize = 17f; setTextColor(0xFFF1F3F4.toInt()); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setLineSpacing(0f, 1.05f) }.also { text = it }
-        val t3 = TextView(ctx).apply { textSize = 12f; setTextColor(0xFF9AA0A6.toInt()); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }.also { sub = it }
+        val t1 = TextView(ctx).apply { textSize = 11f; setTextColor(pal.muted); letterSpacing = 0.06f; isAllCaps = true }.also { title = it }
+        val t2 = TextView(ctx).apply { textSize = 17f; setTextColor(pal.text); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setLineSpacing(0f, 1.05f) }.also { text = it }
+        val t3 = TextView(ctx).apply { textSize = 12f; setTextColor(pal.muted); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }.also { sub = it }
         val b = Bar(ctx).also { bar = it }
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -89,8 +90,8 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
             addView(b, LinearLayout.LayoutParams(-1, dpi(3f)).apply { topMargin = dpi(8f) })
         }
         val close = TextView(ctx).apply {
-            this.text = "✕"; textSize = 15f; setTextColor(0xFFE8EAED.toInt()); gravity = Gravity.CENTER
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x26FFFFFF) }
+            this.text = "✕"; textSize = 15f; setTextColor(pal.text); gravity = Gravity.CENTER
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(pal.chip) }
             contentDescription = "Stop"; setOnClickListener { onStop() }
         }
         val row = LinearLayout(ctx).apply {
@@ -102,7 +103,7 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
         val c = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dpi(18f), dpi(14f), dpi(14f), dpi(14f))
-            background = GradientDrawable().apply { cornerRadius = dp(28f); setColor(0xEB1E1F23.toInt()); setStroke(dpi(1f), 0x33FFFFFF) }
+            background = GradientDrawable().apply { cornerRadius = dp(28f); setColor(pal.bg); setStroke(dpi(1f), pal.stroke) }
             elevation = dp(10f)
             addView(row)
         }
@@ -185,7 +186,7 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
         fun setProgress(x: Float) { v = x.coerceIn(0f, 1f); invalidate() }
         override fun onDraw(cv: Canvas) {
             val w = width.toFloat(); val h = height.toFloat()
-            p.shader = null; p.color = 0x22FFFFFF; cv.drawRoundRect(0f, 0f, w, h, h / 2, h / 2, p)
+            p.shader = null; p.color = pal.stroke; cv.drawRoundRect(0f, 0f, w, h, h / 2, h / 2, p)
             p.shader = LinearGradient(0f, 0f, w, 0f, intArrayOf(colors[0], colors[1], colors[2]), null, Shader.TileMode.CLAMP)
             cv.drawRoundRect(0f, 0f, (w * v).coerceAtLeast(h), h, h / 2, h / 2, p)
         }
