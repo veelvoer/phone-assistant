@@ -568,8 +568,7 @@ class AgentService : AccessibilityService() {
         if (!fresh || b.isEmpty) snap?.let { b.set(it) }
         if (b.isEmpty) return "error: element is gone (screen changed), read the new list"
         if (fresh && (b.top < 0 || b.bottom > sh || b.left < 0 || b.right > sw || !n.isVisibleToUser)) {
-            n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id)
-            n.performAction(AccessibilityNodeInfo.ACTION_SHOW_ON_SCREEN); Thread.sleep(450)
+            n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id); Thread.sleep(450)
             n.refresh(); n.getBoundsInScreen(b)
         }
         val vis = Rect(b); if (!vis.intersect(0, 0, sw, sh)) return "error: element is off screen: scroll to it first"
