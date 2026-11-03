@@ -45,6 +45,7 @@ class AgentService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
     private val nodes = ArrayList<AccessibilityNodeInfo>()
+    private val rects = ArrayList<Rect>()
     @Volatile var running = false; private set
     @Volatile private var stopFlag = false
     private var ov: Overlay? = null
@@ -476,7 +477,7 @@ class AgentService : AccessibilityService() {
         return try {
             when (name) {
                 "open_app" -> openApp(i.getString("name"))
-                "tap" -> nodeCenter(i.getInt("id"))?.let { tapAt(it.first, it.second, 50) } ?: "error: bad id"
+                "tap" -> nodes.getOrNull(i.getInt("id"))?.let { tapNode(it, rects.getOrNull(i.getInt("id"))) } ?: "error: bad id (ids change after every screen change; use the latest list)"
                 "tap_xy" -> tapAt(i.getInt("x"), i.getInt("y"), 50)
                 "long_press" -> if (i.has("id")) nodeCenter(i.getInt("id"))?.let { tapAt(it.first, it.second, 800) } ?: "error: bad id"
                     else tapAt(i.getInt("x"), i.getInt("y"), 800)
@@ -545,6 +546,49 @@ class AgentService : AccessibilityService() {
         return "opened ${hit.loadLabel(pm)}"
     }
 
+    /** Cheap fingerprint of what is on screen (does not touch the ids in `nodes`). */
+    private fun sig(): Int {
+        var h = 1
+        fun walk(n: AccessibilityNodeInfo) {
+            if (!n.isVisibleToUser) return
+            val r = Rect(); n.getBoundsInScreen(r)
+            h = h * 31 + ((n.text ?: n.contentDescription)?.hashCode() ?: 0) * 7 + r.centerX() * 3 + r.centerY() + (if (n.isChecked) 5 else 0) + (if (n.isSelected) 11 else 0)
+            for (k in 0 until n.childCount) n.getChild(k)?.let { walk(it) }
+        }
+        for (w in windows) if (w.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD) w.root?.let { if (it.packageName != packageName) walk(it) }
+        return h
+    }
+
+    /** Reliable tap: scroll into view, real click on the (ancestor) clickable, fall back to a real touch, verify something changed, retry other way. */
+    private fun tapNode(n: AccessibilityNodeInfo, snap: Rect?): String {
+        val m = resources.displayMetrics; val sw = m.widthPixels; val sh = m.heightPixels
+        val b = Rect()
+        val fresh = n.refresh()
+        n.getBoundsInScreen(b)
+        if (!fresh || b.isEmpty) snap?.let { b.set(it) }
+        if (b.isEmpty) return "error: element is gone (screen changed), read the new list"
+        if (fresh && (b.top < 0 || b.bottom > sh || b.left < 0 || b.right > sw || !n.isVisibleToUser)) {
+            n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id)
+            n.performAction(AccessibilityNodeInfo.ACTION_SHOW_ON_SCREEN); Thread.sleep(450)
+            n.refresh(); n.getBoundsInScreen(b)
+        }
+        val vis = Rect(b); if (!vis.intersect(0, 0, sw, sh)) return "error: element is off screen: scroll to it first"
+        val cx = vis.centerX(); val cy = vis.centerY()
+        val before = sig()
+        var c: AccessibilityNodeInfo? = n; var depth = 0
+        while (c != null && !c.isClickable && depth < 6) { c = c.parent; depth++ }
+        val clicked = fresh && c?.isClickable == true && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        var how = if (clicked) "click" else { tapAt(cx, cy, 60); "touch" }
+        settle()
+        if (sig() == before) {
+            // nothing happened: try the other way, then slightly off-centre
+            if (how == "click") { tapAt(cx, cy, 60); how = "click+touch" } else { tapAt(vis.left + vis.width() / 3, vis.top + vis.height() / 2, 80); how = "touch+retry" }
+            settle()
+            if (sig() == before) return "tapped via $how but the screen did NOT change: it may be the wrong element, disabled, or need a long press / different element"
+        }
+        return "tapped ($how)"
+    }
+
     private fun nodeCenter(id: Int): Pair<Int, Int>? {
         val n = nodes.getOrNull(id) ?: return null
         val r = Rect(); n.getBoundsInScreen(r); return Pair(r.centerX(), r.centerY())
@@ -561,6 +605,19 @@ class AgentService : AccessibilityService() {
     }
 
     private fun gesture(path: Path, ms: Long): String {
+        passthrough(true)
+        try { return gestureInner(path, ms) } finally { passthrough(false) }
+    }
+
+    /** The assistant card at the bottom must never swallow the gesture meant for the app below it. */
+    private fun passthrough(on: Boolean) {
+        val l = CountDownLatch(1)
+        main.post { ov?.touchable(!on); l.countDown() }
+        l.await(300, TimeUnit.MILLISECONDS)
+        if (on) Thread.sleep(40)
+    }
+
+    private fun gestureInner(path: Path, ms: Long): String {
         val latch = CountDownLatch(1); var ok = false
         val g = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, ms.coerceAtLeast(1))).build()
         val sent = dispatchGesture(g, object : GestureResultCallback() {
@@ -603,7 +660,7 @@ class AgentService : AccessibilityService() {
         }
         if (roots.isEmpty()) rootInActiveWindow?.let { roots.add(it) }
         if (roots.isEmpty()) return "Screen: unavailable (try wait or screenshot)"
-        nodes.clear()
+        nodes.clear(); rects.clear()
         val m = resources.displayMetrics
         val sb = StringBuilder("Screen ${m.widthPixels}x${m.heightPixels} app=${(rootInActiveWindow ?: roots[0]).packageName}${if (ime) " keyboard=open" else ""}\n")
         fun walk(n: AccessibilityNodeInfo) {
@@ -622,7 +679,7 @@ class AgentService : AccessibilityService() {
                     if (n.isClickable) sb.append('c'); if (n.isEditable) sb.append('e'); if (n.isScrollable) sb.append('s')
                     if (n.isChecked) sb.append('k'); if (n.isFocused) sb.append('f')
                     sb.append(" @${r.centerX()},${r.centerY()}\n")
-                    nodes.add(n)
+                    nodes.add(n); rects.add(Rect(r))
                 }
             }
             for (k in 0 until n.childCount) n.getChild(k)?.let { walk(it) }
@@ -660,9 +717,8 @@ class AgentService : AccessibilityService() {
                 val label = ((hit.text ?: hit.contentDescription) ?: "").toString().take(40)
                 var c: AccessibilityNodeInfo? = hit; var depth = 0
                 while (c != null && !c.isClickable && depth < 6) { c = c.parent; depth++ }
-                val ok = c?.isClickable == true && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                if (!ok) { val r = Rect(); hit.getBoundsInScreen(r); tapAt(r.centerX(), r.centerY(), 50) }
-                return "tapped \"$label\"" + if (count > 1) " (${count - 1} other matches on screen)" else ""
+                val r0 = tapNode(hit, null)
+                return (if (r0.startsWith("error")) r0 else "tapped \"$label\"" + r0.removePrefix("tapped")) + if (count > 1) " (${count - 1} other matches on screen)" else ""
             }
             if (attempt == 11) break
             if (attempt < 6) swipe(w / 2, h * 7 / 10, w / 2, h * 3 / 10, 300)      // look further down first

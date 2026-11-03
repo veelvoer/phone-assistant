@@ -41,6 +41,14 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
     private var level = 0f
     private var smooth = 0f
 
+    /** Let touches fall through the card (while the agent taps) or catch them again. */
+    fun touchable(on: Boolean) {
+        val c = card ?: return
+        val lp = c.layoutParams as? WindowManager.LayoutParams ?: return
+        lp.flags = if (on) lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv() else lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        runCatching { wm.updateViewLayout(c, lp) }
+    }
+
     fun level(rms: Float) { level = ((rms + 2f) / 12f).coerceIn(0f, 1f) }
 
     fun update(state: State, titleS: String, textS: String, subS: String?, progress: Float) {
