@@ -378,7 +378,7 @@ class AgentService : AccessibilityService() {
         if (cont && turns.isNotEmpty()) { val ob = "The user sent a follow-up (see Task).\n" + observe() + planText(); turns.last().obs = JSONArray().put(text(ob)); turns.last().observation = ob }
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false; var evWarned = false
         var model = cfg.model; var noThinking = false; var stall = 0; var lastDone = 0
-        val escalate = { why: String -> if (!hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ $why: switching to a stronger model for this task") } }
+        val escalate = { why: String -> if (!cfg.hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ $why: switching to a stronger model for this task") } }
         val smartPlan = getSharedPreferences("p", MODE_PRIVATE).getBoolean("smartplan", true)
         val tools = tools()
         val hearth = cfg.hearth
