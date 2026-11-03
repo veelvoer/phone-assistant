@@ -4,6 +4,7 @@ const { EventEmitter } = require('events');
 const img = require('./img');
 const { buildTools, specFor } = require('./tools');
 const { sleep } = require('./platform/util');
+const { explain } = require('./errors');
 
 const RULES = `How to work (follow strictly):
 0a. LOOK FIRST. Before every decision read the latest screenshot and the window list: what is on screen, is the target already visible? Say it in "why". Only act on what you actually see. Coordinates for click/drag/zoom/highlight are pixels in the latest screenshot.
@@ -86,8 +87,11 @@ class Agent extends EventEmitter {
     let last = '';
     for (let attempt = 0; attempt < 3; attempt++) {
       if (this.stopFlag) throw new Error('stopped');
-      const r = await this.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': hearth ? cfg.hearthKey : cfg.apiKey, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body), signal: AbortSignal.timeout(hearth ? 300000 : 90000) });
-      const text = await r.text();
+      let r, text;
+      try {
+        r = await this.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': hearth ? cfg.hearthKey : cfg.apiKey, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body), signal: AbortSignal.timeout(hearth ? 300000 : 90000) });
+        text = await r.text();
+      } catch (e) { last = 'NETWORK: ' + (e && e.message ? e.message : e); if (attempt < 2) await sleep(1500 * (attempt + 1)); continue; }
       if (r.ok) return JSON.parse(text);
       last = `API ${r.status}: ${text.slice(0, 900)}`;
       if (r.status !== 429 && r.status !== 529 && r.status < 500) throw new Error(last);
@@ -124,7 +128,10 @@ class Agent extends EventEmitter {
     try {
       if (await this.shortcut(task)) return true;
       await this.loop(task);
-    } catch (e) { this.log('Error: ' + (e && e.message ? e.message : e)); }
+    } catch (e) {
+      const raw = e && e.message ? e.message : String(e); this.log('Error: ' + raw);
+      if (raw !== 'stopped') { const say = explain(raw, this.config.get('lang') !== 'en'); this.speakImpl(say); this.emit('result', say); }
+    }
     if (!this.noted) this.addNote(task, '(did not finish: stopped or failed)');
     this.log('💰 ' + `${this.usage.taskIn} in · ${this.usage.taskOut} out · ${this.usage.calls} calls ≈ $${this.usage.taskCost.toFixed(4)}`);
     this.running = false; this.emit('end');
@@ -135,7 +142,7 @@ class Agent extends EventEmitter {
     const cfg = this.config.all(); const hearth = cfg.provider === 'hearth';
     if (!hearth && !cfg.apiKey) throw new Error('No API key: open Settings and add your Claude API key.');
     if (hearth && (!cfg.hearthUrl || !cfg.hearthKey)) throw new Error('Hearth URL and key are required in Settings.');
-    let model = hearth ? cfg.hearthModel : cfg.model; let noThinking = false; let stall = 0, lastDone = 0, same = 0, nudges = 0, lastHash = '', finishWarned = false, evWarned = false;
+    let model = hearth ? cfg.hearthModel : cfg.model; let noThinking = false; let smartOk = true; let stall = 0, lastDone = 0, same = 0, nudges = 0, lastHash = '', finishWarned = false, evWarned = false;
     const desc = this.platform.describe();
     const ctx = this.makeCtx();
     const tools = buildTools(ctx); const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
@@ -165,7 +172,7 @@ class Agent extends EventEmitter {
         msgs.push({ role: 'user', content: t.ids.map((id, j) => ({ type: 'tool_result', tool_use_id: id, content: last && j === t.ids.length - 1 ? t.obs : t.briefs[j], ...(i === turns.length - 2 && j === t.ids.length - 1 ? { cache_control: { type: 'ephemeral' } } : {}) })) });
       });
       const planCall = step === 1 && turns.length === 0;
-      const callModel = !hearth && planCall && cfg.smartPlan && model.includes('haiku') ? 'claude-sonnet-5-5' : model;
+      const callModel = !hearth && planCall && cfg.smartPlan && smartOk && model.includes('haiku') ? 'claude-sonnet-5-5' : model;
       const body = { model: callModel, max_tokens: 900, messages: msgs };
       if (hearth) { body.system = SYSTEM_TEXT(desc, tools); body.stream = false; }
       else {
@@ -177,6 +184,7 @@ class Agent extends EventEmitter {
       this.emit('status', 'Thinking…');
       let resp;
       try { resp = await this.api(body, cfg); } catch (e) {
+        if (!hearth && callModel !== model && smartOk && /API (400|403|404)/.test(e.message || '')) { smartOk = false; this.log('↻ planning model unavailable, using the main model'); continue; }
         if (!hearth && !noThinking && /thinking/.test(e.message || '')) { noThinking = true; turns.forEach((t) => { t.assistant = stripThinking(t.assistant); }); this.log('↻ retrying without thinking blocks'); continue; }
         throw e;
       }

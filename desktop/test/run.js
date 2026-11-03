@@ -47,5 +47,10 @@ for (const f of fs.readdirSync(path.join(__dirname, '../src/renderer')).filter((
   // dangerous shell blocked
   const { buildTools } = require('../src/tools'); const t = buildTools({ ...a.makeCtx(), config: cfg }); const sh = t.find((x) => x.name === 'shell');
   assert.ok((await sh.run({ command: 'rm -rf ~/x' })).startsWith('blocked')); assert.ok((await sh.run({ command: 'ls' })).includes('exit 0'));
+  const { explain } = require('../src/errors');
+  assert.ok(/API-sleutel/.test(explain('API 401: invalid x-api-key', true))); assert.ok(/credit/.test(explain('API 400: Your credit balance is too low', false))); assert.ok(/internet/.test(explain('NETWORK: fetch failed', true)));
+  // network failure is retried and then reported, not a crash
+  let tries = 0; const flaky = new Agent({ config: cfg, platform, usage, fetchImpl: async () => { tries++; throw new Error('fetch failed'); }, speak: () => {} });
+  const said = []; flaky.on('result', (m) => said.push(m)); const realSleep = global.setTimeout; await flaky.run('doe iets'); assert.strictEqual(tries, 3); assert.ok(/internet/.test(said[0] || ''), 'network error is explained: ' + said[0]);
   console.log('agent tests passed');
 })().catch((e) => { console.error('TEST FAILED', e); process.exit(1); });

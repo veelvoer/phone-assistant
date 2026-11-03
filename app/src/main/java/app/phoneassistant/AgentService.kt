@@ -79,7 +79,8 @@ class AgentService : AccessibilityService() {
                 tts?.stop(); speaking = false; abandonFocus(); boostEnd()
                 stopFlag = true; endSession(true); hideOverlay()
             }
-            main.postDelayed(this, 800)
+            // poll fast only while there is something to protect, otherwise barely at all (battery)
+            main.postDelayed(this, if (voice || speaking || running || ov != null) 800L else 4000L)
         }
     }
 
@@ -427,7 +428,11 @@ class AgentService : AccessibilityService() {
         thread {
             runDid = ArrayList(); noted = false
             if (!ensureAwake()) { Bus.log("■ Phone is locked"); running = false; Bus.listener?.invoke(); main.post { refreshOverlay() }; return@thread }
-            try { loop(task, cfg, cont) } catch (e: Throwable) { Bus.log("Error: ${e.message ?: e.javaClass.simpleName}") }
+            try { loop(task, cfg, cont) } catch (e: Throwable) {
+                val raw = e.message ?: e.javaClass.simpleName
+                Bus.log("Error: $raw")
+                if (raw != "stopped") { val say = Errors.explain(raw, langTag().startsWith("nl") || (langTag().isEmpty() && Locale.getDefault().language == "nl")); speak(say); showResult(say) }
+            }
             if (!noted) addNote(task, "(did not finish: stopped or failed)")
             Bus.log("💰 " + Usage.taskLine(cfg.hearth))
             running = false; Bus.listener?.invoke()
@@ -526,7 +531,7 @@ class AgentService : AccessibilityService() {
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false; var evWarned = false
         var model = cfg.model; var noThinking = false; var stall = 0; var lastDone = 0
         val escalate = { why: String -> if (!cfg.hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; noThinking = true; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ $why: switching to a stronger model for this task") } }
-        val smartPlan = getSharedPreferences("p", MODE_PRIVATE).getBoolean("smartplan", true)
+        val smartPlan = getSharedPreferences("p", MODE_PRIVATE).getBoolean("smartplan", true); var smartOk = true
         val tools = tools()
         val hearth = cfg.hearth
         for (step in 1..60) {
@@ -554,7 +559,7 @@ class AgentService : AccessibilityService() {
                 msgs.put(JSONObject().put("role", "user").put("content", res))
             }
             val planCall = step == 1 && turns.isEmpty()
-            val callModel = if (!hearth && planCall && smartPlan && model.contains("haiku")) "claude-sonnet-5-5" else model   // a stronger model writes the plan; the cheap one executes it
+            val callModel = if (!hearth && planCall && smartPlan && smartOk && model.contains("haiku")) "claude-sonnet-5-5" else model   // a stronger model writes the plan; the cheap one executes it
             val body = JSONObject().put("model", callModel).put("max_tokens", 800).put("messages", msgs)
             // forcing a tool is only supported on the Haiku models; Sonnet/Opus 5.5 reject it (they follow the instructions instead)
             if (!hearth && callModel.contains("haiku")) body.put("tool_choice", if (planCall) JSONObject().put("type", "tool").put("name", "plan") else JSONObject().put("type", "any"))
@@ -564,6 +569,7 @@ class AgentService : AccessibilityService() {
             statusLine = "Thinking…"; refreshOverlay()
             if (noThinking && !hearth) body.put("thinking", JSONObject().put("type", if (callModel.contains("haiku")) "disabled" else "between_tools"))
             val resp = try { Api.post(cfg.url, cfg.key, body) } catch (e: RuntimeException) {
+                if (!hearth && callModel != model && smartOk && Regex("API (400|403|404)").containsMatchIn(e.message ?: "")) { smartOk = false; Bus.log("↻ planning model unavailable, using the main model"); continue }
                 if (!hearth && !noThinking && (e.message ?: "").contains("thinking")) {   // thinking-block replay problem: drop all of them and run without thinking
                     noThinking = true; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("↻ retrying without thinking blocks"); continue
                 }
