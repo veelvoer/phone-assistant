@@ -377,7 +377,8 @@ class AgentService : AccessibilityService() {
         var taskText = if (cont) sessionTask + "\nFOLLOW-UP from the user (after you finished; it may correct or extend what you did: use the earlier context, e.g. fix, undo or redo it): $task" else task
         if (cont && turns.isNotEmpty()) { val ob = "The user sent a follow-up (see Task).\n" + observe() + planText(); turns.last().obs = JSONArray().put(text(ob)); turns.last().observation = ob }
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false; var evWarned = false
-        var model = cfg.model; var noThinking = false
+        var model = cfg.model; var noThinking = false; var stall = 0; var lastDone = 0
+        val escalate = { why: String -> if (!hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ $why: switching to a stronger model for this task") } }
         val smartPlan = getSharedPreferences("p", MODE_PRIVATE).getBoolean("smartplan", true)
         val tools = tools()
         val hearth = cfg.hearth
@@ -468,11 +469,15 @@ class AgentService : AccessibilityService() {
                 ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp)); if (dsc.isNotBlank()) runDid.add(dsc)
             }
             settle()
+            val doneNow = todos.count { it.status == "done" }
+            if (doneNow > lastDone) { lastDone = doneNow; stall = 0 } else stall++
+            if (stall >= 6) escalate("no progress for $stall steps")
+            if (!hearth && Usage.taskCost > 0.30) { Bus.log("■ Cost limit (\$0.30) reached for one task"); speak("Gestopt: deze taak werd te duur"); showResult("Stopped: cost limit reached"); return }
             val scr = observe()
             val h = scr.hashCode()
             var warn = ""
             if (h == lastHash) { same++; warn = "\n⚠ The screen did NOT change after your last action. Do not repeat it: pick a different element or approach." + if (same >= 2) " You are stuck: call ask_user now." else ""; if (!hearth) wantImage = true
-                if (same >= 2 && !hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ stuck: switching to a stronger model for this task") }
+                if (same >= 2) escalate("stuck")
             } else same = 0
             lastHash = h
             if (!hearth && nodes.size < 3) wantImage = true
@@ -537,6 +542,7 @@ class AgentService : AccessibilityService() {
         a.put(tool("plan", "Set your GOAL and to-do list. Call it FIRST in every task (it is forced on your first turn), and again whenever a step is done/started or the user changes the task. Always send everything.", JSONObject().put("goal", p("string", "the concrete end result the user wants, one sentence")).put("done_when", p("string", "what exactly must be visible/true on screen to prove the goal is reached")).put("items", JSONObject().put("type", "array").put("items", item)), listOf("goal", "done_when", "items")))
         val hi = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string", "visible text of the element, located live")).put("substring", p("string", "exact piece of the text to box only that part")).put("id", p("integer", "element id from the latest list")).put("x", p("integer")).put("y", p("integer")).put("w", p("integer")).put("h", p("integer")).put("label", p("string", "short note shown next to it")))
         a.put(tool("highlight", "Show the user something on their screen: dims the screen and outlines exactly the thing, with an optional label. Use it for 'show me / where is / which one / point out / find' requests or to point at an answer (price, button, message). Each item: text = the visible text of the element (best: located live, always accurate), plus substring = an exact piece of a long text to box only that part (e.g. a price or a name inside a paragraph); or id from the latest list; or raw pixels x,y,w,h. A screenshot is attached afterwards: check the outline, redo if off. Then finish with a short spoken explanation.", JSONObject().put("items", JSONObject().put("type", "array").put("items", hi)).put("seconds", p("integer", "how long to keep it, default 10")), listOf("items")))
+        a.put(tool("tap_labels", "Tap several elements in order by their exact visible label/description, resolved live. Use for ANY sequence of buttons: calculator digits and operators (e.g. [\"1\",\"2\",\"multiply\",\"5\",\"equals\"]), keypads, dialers, PIN pads. Far more reliable than tapping ids one by one.", JSONObject().put("labels", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("labels")))
         a.put(tool("find_tap", "Find an element by its visible text/description (fuzzy, ignores case/accents), scrolling the page if needed, and tap it. Much faster than scrolling and tapping by hand: use for known buttons, contacts, list items, settings.", JSONObject().put("text", p("string")), listOf("text")))
         a.put(tool("remember", "Save a lasting fact about the user, very short (<= 80 chars), e.g. 'mom = Anna Peeters', 'brother = Lars (Snapchat: lars_v)', 'I am Warre, 17'. Use when the user states a relationship, name, preference or address that will matter later, or says 'remember'. Never save temporary things.", JSONObject().put("fact", p("string")), listOf("fact")))
         a.put(tool("forget", "Delete saved facts containing this text.", JSONObject().put("text", p("string")), listOf("text")))
@@ -589,6 +595,7 @@ class AgentService : AccessibilityService() {
                     val max = am.getStreamMaxVolume(st); am.setStreamVolume(st, (i.getInt("level") * max / 100).coerceIn(0, max), android.media.AudioManager.FLAG_SHOW_UI); "volume set"
                 }
                 "read_screen" -> readScreen()
+                "tap_labels" -> tapLabels(i.getJSONArray("labels"))
                 "find_tap" -> findTap(i.getString("text"))
                 "remember_name" -> {
                     val p = getSharedPreferences("p", MODE_PRIVATE); val ac = i.getString("actual").trim(); val sp = i.optString("spoken").trim()
@@ -875,6 +882,23 @@ class AgentService : AccessibilityService() {
 
     private fun spoken(m: String): String { val f = m.trim().split(Regex("(?<=[.!?])\\s+")).first(); return if (f.length <= 170) f else f.take(170) }
 
+    /** Tap several elements by their visible label in order (digits, keypad, dialer): resolved live, so no id mix-ups. */
+    private fun tapLabels(arr: JSONArray): String {
+        val ok = ArrayList<String>(); val miss = ArrayList<String>()
+        for (k in 0 until arr.length()) {
+            if (stopFlag) break
+            val l = arr.optString(k)
+            val n = locate(l)
+            if (n == null) { miss.add(l); continue }
+            n.refresh()
+            var c: AccessibilityNodeInfo? = n; var depth = 0
+            while (c != null && !c.isClickable && depth < 6) { c = c.parent; depth++ }
+            if (!(c?.isClickable == true && c.performAction(AccessibilityNodeInfo.ACTION_CLICK))) { val r = Rect(); n.getBoundsInScreen(r); tapAt(r.centerX(), r.centerY(), 50) }
+            ok.add(l); Thread.sleep(140)
+        }
+        return "tapped ${ok.size}/${arr.length()}: ${ok.joinToString(" ")}" + if (miss.isEmpty()) "" else "; NOT FOUND: " + miss.joinToString(", ") + " (use the exact label from the list)"
+    }
+
     private fun readScreen(): String {
         val sb = StringBuilder(); var last = ""
         fun walk(n: AccessibilityNodeInfo) {
@@ -915,7 +939,7 @@ private const val RULES = """How to work (follow strictly):
 3a. Questions: answer exactly what was asked from the exact label/row on screen (e.g. "Android version" is not the same as the OS skin version). If the needed row is not visible, open the right sub-screen or scroll to it. Never answer from guesses or memory when the screen can tell you. Do not type calculations into a field unless it is a real input; tap the buttons like a person.
 3. Finish only when done_when is verified on the current screen: call finish with evidence = what you saw that proves it. For multi-part requests do every part. If the user asked to be SHOWN or told something (where is X, which one, what does it say, find me...), find it, call highlight on it (ids from the latest list), then finish with a short spoken answer. Do exactly what was asked, never ignore part of a request.
 4. Ask the user (ask_user) when the request is unclear or doesn't match what you see (e.g. contact not found, two matches, wrong app), when something unexpected blocks you (login, captcha, permission), or after two failed approaches. Ask short, concrete questions. Don't ask when the request is clear: just do it, without asking for confirmation.
-5. Be efficient: fewest steps. Use find_tap{text} when you know the label of what to press, even if it is off-screen or in a list. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
+5. Be efficient: fewest steps. For a sequence of buttons (calculator, keypad, dialer) use ONE tap_labels call with the exact labels from the list; never tap digits by guessing ids. Use find_tap{text} when you know the label of what to press, even if it is off-screen or in a list. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
 6. The user may interrupt while you work. Lines "User then added (INTERRUPT…): ..." are new instructions: first update the to-do list with plan (add, remove, reorder or replace steps as they ask), then continue with the updated list right away. "Earlier this session" lists previous commands for context.
 7. The user may speak Dutch; match app names as installed; write spoken messages (finish, ask_user) in the user's language.
 8. Names: the request comes from speech recognition, so names are often misspelled or misheard. Match names on screen approximately (ignore case/accents, similar sounds, first name only, partial text). Search with a short partial name rather than the full one. If exactly one plausible match: use it. If several or none: ask_user and read out the options.
@@ -934,7 +958,7 @@ private const val SYSTEM_TEXT = """You control an Android phone to complete the 
 Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
 GOAL: send a snap to Anna. Snapchat isn't open yet. [{"tool":"open_app","name":"Snapchat"}]
 Tools:
-open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | forget{text} | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | tap_labels{labels:[...]} (tap a sequence of buttons by label: digits, keypads) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | forget{text} | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
 No screenshots are available.
 $RULES
 Always end your reply with the JSON array of actions."""
