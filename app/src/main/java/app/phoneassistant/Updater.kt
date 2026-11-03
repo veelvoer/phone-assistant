@@ -41,9 +41,13 @@ object Updater {
         busy = true; message = "Checking…"; ui()
         thread {
             try {
-                val con = URL("https://api.github.com/repos/$REPO/releases/latest").openConnection() as HttpURLConnection
+                val con = URL("https://api.github.com/repos/$REPO/releases?per_page=30").openConnection() as HttpURLConnection
                 con.setRequestProperty("Accept", "application/vnd.github+json"); con.connectTimeout = 15000; con.readTimeout = 15000
-                val j = JSONObject(con.inputStream.bufferedReader().use { it.readText() })
+                // newest phone release (tag v1.2.3) that has an APK; the desktop app has its own releases (desktop-v…) in the same repo
+                val list = org.json.JSONArray(con.inputStream.bufferedReader().use { it.readText() })
+                var j: JSONObject? = null
+                for (k in 0 until list.length()) { val r = list.getJSONObject(k); if (!r.optBoolean("draft") && Regex("^v\\d+\\.\\d+").containsMatchIn(r.optString("tag_name"))) { j = r; break } }
+                if (j == null) { message = "No release found"; busy = false; ui(); return@thread }
                 val tag = j.getString("tag_name")
                 val assets = j.getJSONArray("assets")
                 var apk = ""

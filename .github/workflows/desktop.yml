@@ -41,4 +41,4 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { path: out, merge-multiple: true }
       - uses: softprops/action-gh-release@v2
-        with: { files: 'out/*' }
+        with: { files: 'out/*', prerelease: true, make_latest: false }
