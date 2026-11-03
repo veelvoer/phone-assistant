@@ -26,3 +26,6 @@ The app checks GitHub releases and shows an **Update available** card; tap it to
 
 ## Automation / testing over adb
 `adb shell "am broadcast -a app.phoneassistant.RUN --es task 'open de rekenmachine' -n app.phoneassistant/.TestReceiver"` runs a task; `app.phoneassistant.STOP` stops it. Only adb/shell can send it (guarded by the DUMP permission). Progress is logged under the tag `PAlog`.
+
+## Computer version
+The same assistant for Linux (Hyprland, Wayland, X11) and Windows lives in [`desktop/`](desktop/README.md); downloads are in the releases tagged `desktop-v…`.

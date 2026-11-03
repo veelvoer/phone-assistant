@@ -262,6 +262,10 @@ async function selftest() {
     const shot = await platform.screenshot(); out.screenshotBytes = shot.png.length;
     require('fs').writeFileSync('/tmp/assistant-selftest.png', shot.png);
     out.cardBounds = win(cardWin) ? cardWin.getBounds() : null; out.fxBounds = win(fxWin) ? fxWin.getBounds() : null;
+    if (flag('--selftest-stt')) {
+      const buf = fs.readFileSync('/tmp/s1.f32'); const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4); const t1 = Date.now();
+      config.set({ lang: 'en', whisperModel: 'base' }); out.stt = await stt.transcribe(f32); out.sttMs = Date.now() - t1;
+    }
     if (flag('--selftest-input') && win(cardWin)) {
       const r = await cardWin.webContents.executeJavaScript("(()=>{const r=document.getElementById('input').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()");
       const b = cardWin.getBounds(); await platform.screenshot();
