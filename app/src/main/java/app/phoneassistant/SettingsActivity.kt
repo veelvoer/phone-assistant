@@ -45,7 +45,7 @@ class SettingsActivity : Activity() {
         keyHint = ui.tv("", 12f, c.onSurfaceV).apply { layoutParams = ui.lp(top = 8) }
         val modelChips = LinearLayout(this).apply {
             layoutParams = ui.lp(top = 10)
-            listOf("claude-haiku-5-5" to "Haiku 5.5 · fast", "claude-sonnet-5-5" to "Sonnet 5.5 · smart", "claude-opus-5-5" to "Opus 5.5 · best").forEach { (id, n) -> addView(ui.chip(n) { if (!hearth) model.setText(id) }) }
+            listOf("claude-haiku-5-5" to "Haiku · fast", "claude-sonnet-5-5" to "Sonnet · smart", "claude-opus-5-5" to "Opus · best").forEach { (id, n) -> addView(ui.chip(n) { if (!hearth) model.setText(id) }.apply { setSingleLine(); (layoutParams as LinearLayout.LayoutParams).rightMargin = ui.dp(6) }) }
         }
         val providerBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         fun load() {
@@ -116,7 +116,7 @@ class SettingsActivity : Activity() {
 
     private fun label(v: android.speech.tts.Voice): String {
         val q = when { v.quality >= 500 -> "very high"; v.quality >= 400 -> "high"; v.quality >= 300 -> "normal"; else -> "low" }
-        return "${v.locale.displayName} · $q" + (if (v.isNetworkConnectionRequired) " · online" else " · offline") + "  (${v.name.substringAfterLast('-').take(10)})"
+        return "${v.locale.displayName} · $q" + (if (v.isNetworkConnectionRequired) " · online" else " · offline")
     }
 
     private fun refreshVoice() {
