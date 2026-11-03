@@ -469,9 +469,10 @@ class AgentService : AccessibilityService() {
                 ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp)); if (dsc.isNotBlank()) runDid.add(dsc)
             }
             settle()
+            stall += briefs.count { it.startsWith("error") }   // failed actions (bad ids, missing labels) count as lost steps
             val doneNow = todos.count { it.status == "done" }
             if (doneNow > lastDone) { lastDone = doneNow; stall = 0 } else stall++
-            if (stall >= 6) escalate("no progress for $stall steps")
+            if (stall >= 5) escalate("no progress for $stall steps")
             if (!hearth && Usage.taskCost > 0.30) { Bus.log("■ Cost limit (\$0.30) reached for one task"); speak("Gestopt: deze taak werd te duur"); showResult("Stopped: cost limit reached"); return }
             val scr = observe()
             val h = scr.hashCode()

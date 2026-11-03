@@ -23,3 +23,6 @@ Press and hold the Essential Key: it keeps listening, runs every sentence as a c
 
 ## Updates
 The app checks GitHub releases and shows an **Update available** card; tap it to download and install. Releases are signed with a fixed key, so updates install over the old version (v1.1.0 and older must be uninstalled once).
+
+## Automation / testing over adb
+`adb shell "am broadcast -a app.phoneassistant.RUN --es task 'open de rekenmachine' -n app.phoneassistant/.TestReceiver"` runs a task; `app.phoneassistant.STOP` stops it. Only adb/shell can send it (guarded by the DUMP permission). Progress is logged under the tag `PAlog`.
