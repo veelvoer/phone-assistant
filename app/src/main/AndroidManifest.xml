@@ -10,6 +10,8 @@
     <queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
     <application
         android:label="Assistant"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
@@ -23,6 +25,9 @@
             <intent-filter><action android:name="app.phoneassistant.RUN" /><action android:name="app.phoneassistant.STOP" /></intent-filter>
         </receiver>
         <receiver android:name=".InstallReceiver" android:exported="false" />
+        <service android:name=".AssistantTile" android:exported="true" android:label="Assistant" android:icon="@drawable/ic_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
         <activity android:name=".SettingsActivity" android:exported="false" />
         <service
             android:name=".AgentService"

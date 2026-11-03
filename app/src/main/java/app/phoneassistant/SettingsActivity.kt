@@ -79,6 +79,22 @@ class SettingsActivity : Activity() {
         root.addView(ui.card(voiceCard))
         tts = TextToSpeech(this) { refreshVoice() }
 
+        // ---- Shortcut
+        root.addView(ui.sectionTitle("Shortcut"))
+        val scName = ui.tv("", 17f, c.onSurface, true)
+        val scSeen = ui.tv("", 12f, c.onSurfaceV).apply { layoutParams = ui.lp(top = 6) }
+        fun scLabel() = p.getString("sc_label", "Essential Key")
+        fun paintSc() { scName.text = scLabel(); scSeen.text = "Last button the assistant saw: " + (AgentService.lastKeySeen.ifEmpty { "none yet" }) }
+        val scCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scCard.addView(ui.tv("Button that wakes the assistant", 13f, c.onSurfaceV)); scCard.addView(scName.apply { layoutParams = ui.lp(top = 2) })
+        scCard.addView(ui.segmented(listOf("Press & hold", "Double press", "Single press"), p.getInt("sc_mode", 0)) { i -> p.edit().putInt("sc_mode", i).apply() })
+        scCard.addView(LinearLayout(this).apply { layoutParams = ui.lp(top = 12)
+            addView(ui.button("Press a button…", filled = true) { recordShortcut(::paintSc) }.apply { layoutParams = ui.lp(0, -2, weight = 1f, right = 8) })
+            addView(ui.button("Reset") { p.edit().putInt("sc_scan", 250).putInt("sc_key", 0).putString("sc_label", "Essential Key").apply(); paintSc() }.apply { layoutParams = ui.lp(0, -2, weight = 1f) }) })
+        scCard.addView(scSeen)
+        scCard.addView(ui.tv("Also available without any button: add the “Assistant” tile to your Quick Settings (swipe down twice → pencil icon). “Single press” takes over that button completely.", 12f, c.onSurfaceV).apply { layoutParams = ui.lp(top = 10) })
+        root.addView(ui.card(scCard)); paintSc()
+
         // ---- Memory
         root.addView(ui.sectionTitle("Memory"))
         memory = ui.field("e.g.\nI am Warre\nmom = Anna Peeters\nbrother = Lars (Snapchat: lars_v)", multi = true).apply { minLines = 5; setText(p.getString("facts", "")) }
@@ -104,6 +120,19 @@ class SettingsActivity : Activity() {
 
         setContentView(ui.page(root))
     }
+
+    private fun recordShortcut(done: () -> Unit) {
+        if (AgentService.instance == null) { toast("Turn on the Assistant accessibility service first"); return }
+        val dlg = AlertDialog.Builder(this).setTitle("Press the button").setMessage("Press the button you want to use now (Essential Key, volume, headset button…).").setNegativeButton("Cancel") { _, _ -> AgentService.recordKey = null }.setOnCancelListener { AgentService.recordKey = null }.create()
+        AgentService.recordKey = { scan, key ->
+            val label = if (scan == ESS) "Essential Key" else android.view.KeyEvent.keyCodeToString(key).removePrefix("KEYCODE_").lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() } + if (scan > 0) " (button $scan)" else ""
+            p.edit().putInt("sc_scan", scan).putInt("sc_key", key).putString("sc_label", label).apply()
+            dlg.dismiss(); done(); toast("Saved: $label")
+        }
+        dlg.show()
+    }
+
+    private val ESS = 250
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
@@ -141,6 +170,6 @@ class SettingsActivity : Activity() {
         balance.text.toString().trim().toFloatOrNull()?.let { v -> if (kotlin.math.abs(v - (Usage.left(this) ?: -1f)) > 0.004f) Usage.setBalance(this, v) }
     }
 
-    override fun onPause() { save(); super.onPause() }
+    override fun onPause() { AgentService.recordKey = null; save(); super.onPause() }
     override fun onDestroy() { tts?.shutdown(); super.onDestroy() }
 }

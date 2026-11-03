@@ -39,6 +39,8 @@ import kotlin.concurrent.thread
 class AgentService : AccessibilityService() {
     companion object {
         @Volatile var instance: AgentService? = null
+        @Volatile var recordKey: ((Int, Int) -> Unit)? = null
+        @Volatile var lastKeySeen = ""
         @Volatile var todos: List<Todo> = emptyList()
     }
     class Todo(val text: String, val status: String)
@@ -65,7 +67,10 @@ class AgentService : AccessibilityService() {
     private var focusReq: android.media.AudioFocusRequest? = null
 
     /** A phone/VoIP call is ringing or active: the assistant must be silent and gone. */
-    private fun inCall(): Boolean = audio.mode.let { it == android.media.AudioManager.MODE_IN_CALL || it == android.media.AudioManager.MODE_IN_COMMUNICATION || it == android.media.AudioManager.MODE_RINGTONE || it == android.media.AudioManager.MODE_CALL_SCREENING }
+    private fun inCall(): Boolean = audio.mode.let { it == android.media.AudioManager.MODE_IN_CALL || it == android.media.AudioManager.MODE_RINGTONE || it == android.media.AudioManager.MODE_CALL_SCREENING }
+
+    /** WhatsApp/Discord-style call audio. Some apps leave this mode switched on by mistake, so it only blocks starting, with a visible message. */
+    private fun voipActive(): Boolean = audio.mode == android.media.AudioManager.MODE_IN_COMMUNICATION
 
     private val callWatch = object : Runnable {
         override fun run() {
@@ -144,59 +149,50 @@ class AgentService : AccessibilityService() {
     private var rec: SpeechRecognizer? = null
     private var held: Runnable? = null
 
+    private var lastUpAt = 0L
+
     override fun onKeyEvent(e: KeyEvent): Boolean {
-        if (e.scanCode != ESSENTIAL_SCAN) return false
-        if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
-            held?.let { main.removeCallbacks(it) }
-            held = Runnable { held = null; listen() }; main.postDelayed(held!!, 450)
-        } else if (e.action == KeyEvent.ACTION_UP) {
-            held?.let { main.removeCallbacks(it); held = null }
+        val rec = recordKey
+        if (rec != null) {   // "press the button you want to use"
+            if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) { recordKey = null; main.post { rec(e.scanCode, e.keyCode) } }
+            return true
         }
-        return false
-    }
-
-    // Voice session: hold the key once, keep talking; every sentence becomes a command until you say stop or tap the overlay.
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
-    @Volatile private var speaking = false
-    private var voice = false
-    private var tempVoice = false
-    @Volatile private var asking = false
-    private var question = ""
-    private val answers = java.util.concurrent.LinkedBlockingQueue<String>()
-    private val notes = ArrayList<String>()   // earlier commands + results this session
-    private var partial = ""
-    private var voiceCfg: Cfg? = null
-    private var errStreak = 0
-    private val extras = java.util.concurrent.ConcurrentLinkedQueue<String>()
-    private val stopWords = setOf("stop", "stoppen", "stop maar", "stop met luisteren", "klaar", "dat was het", "annuleer", "annuleren", "cancel", "that's all", "exit", "stop listening")
-
-    private fun buzz(ms: Long = 40) = (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-
-    private fun refreshOverlay() = main.post {
-        val cur = todos.firstOrNull { it.status == "doing" } ?: todos.firstOrNull { it.status == "pending" }
-        val planSub = cur?.let { "${todos.count { t -> t.status == "done" } + 1}/${todos.size} · ${it.text}" }
-        val prog = if (todos.isEmpty()) 0f else (todos.count { it.status == "done" } + 0.3f) / todos.size
-        val fresh = System.currentTimeMillis() < resultUntil
-        val o = ov()
-        when {
-            asking -> o.update(Overlay.State.ASKING, "Question", question, if (voice) partial.ifEmpty { "Say your answer…" } else null, 0f)
-            running -> o.update(Overlay.State.WORKING, if (voice) "Working · listening" else "Working", statusLine.ifEmpty { "Thinking…" },
-                if (voice && partial.isNotEmpty()) "🎤 $partial" else planSub ?: if (voice) "Say something to add or change" else null, prog)
-            voice -> o.update(Overlay.State.LISTENING, if (fresh) "Done" else "Listening", if (partial.isNotEmpty()) partial else if (fresh) resultText else "Say what I should do…", if (fresh) "Listening for your next command" else null, 0f)
-            fresh -> o.update(Overlay.State.INFO, "Done", resultText, null, 0f)
-            else -> { ov?.hide(); ov = null }
+        lastKeySeen = "${KeyEvent.keyCodeToString(e.keyCode).removePrefix("KEYCODE_")} (scan ${e.scanCode})"
+        val p = getSharedPreferences("p", MODE_PRIVATE)
+        val scan = p.getInt("sc_scan", ESSENTIAL_SCAN); val code = p.getInt("sc_key", 0)
+        val match = if (scan > 0) e.scanCode == scan else code != 0 && e.keyCode == code
+        if (!match) return false
+        val down = e.action == KeyEvent.ACTION_DOWN
+        when (p.getInt("sc_mode", 0)) {
+            0 -> {   // press and hold
+                if (down && e.repeatCount == 0) { held?.let { main.removeCallbacks(it) }; held = Runnable { held = null; listen() }; main.postDelayed(held!!, 450) }
+                else if (e.action == KeyEvent.ACTION_UP) { held?.let { main.removeCallbacks(it); held = null } }
+                return false
+            }
+            1 -> {   // double press: the second press starts it
+                if (down && e.repeatCount == 0) { val now = android.os.SystemClock.uptimeMillis(); if (now - lastUpAt < 450) { lastUpAt = 0; main.post { listen() } } }
+                else if (e.action == KeyEvent.ACTION_UP) lastUpAt = android.os.SystemClock.uptimeMillis()
+                return false
+            }
+            else -> {   // single press (the key does nothing else any more)
+                if (e.action == KeyEvent.ACTION_UP) main.post { listen() }
+                return true
+            }
         }
     }
 
-    private fun showResult(m: String) { resultText = m; resultUntil = System.currentTimeMillis() + 4500; refreshOverlay(); main.postDelayed({ refreshOverlay() }, 4600) }
+    /** Quick Settings tile / app: start or stop the voice session. */
+    fun toggleFromUi(closeShade: Boolean) { main.post { if (closeShade) { performGlobalAction(GLOBAL_ACTION_BACK); main.postDelayed({ listen() }, 350) } else listen() } }
+
+    private fun notice(t: String) { showOverlay(t); main.postDelayed({ refreshOverlay() }, 3000) }
 
     private fun listen() {
         if (voice) { endSession(true); return }
-        if (inCall()) return   // never wake up during a call
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { showOverlay("Open Phone Assistant once and allow the microphone"); main.postDelayed({ refreshOverlay() }, 3000); return }
+        if (inCall()) { notice("In a call: assistant stays quiet"); return }
+        if (voipActive()) { notice("Another app is using call audio (a call, or an app that forgot to release it). Close it and try again."); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { notice("Open Assistant once and allow the microphone"); return }
         val c = cfgFromPrefs()
-        if (c == null) { showOverlay("Add your API key in the app first"); main.postDelayed({ refreshOverlay() }, 3000); return }
+        if (c == null) { notice("Add your API key in the Assistant app first"); return }
         voiceCfg = c; beginVoice()
     }
 
@@ -320,7 +316,7 @@ class AgentService : AccessibilityService() {
 
     private fun speak(t: String) = main.post {
         val e = tts ?: return@post
-        if (!ttsReady || t.isBlank() || inCall() || !getSharedPreferences("p", MODE_PRIVATE).getBoolean("speak", true)) return@post
+        if (!ttsReady || t.isBlank() || inCall() || voipActive() || !getSharedPreferences("p", MODE_PRIVATE).getBoolean("speak", true)) return@post
         speaking = true; rec?.cancel(); rec?.destroy(); rec = null
         val tag = langTag(); val loc = if (tag.isEmpty()) Locale.getDefault() else Locale.forLanguageTag(tag)
         e.language = loc
