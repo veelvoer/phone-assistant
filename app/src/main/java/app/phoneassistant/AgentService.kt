@@ -471,7 +471,7 @@ class AgentService : AccessibilityService() {
             lastHash = h
             if (!hearth && nodes.size < 3) wantImage = true
             val observation = briefs.last() + warn + "\n" + scr + planText()
-            android.util.Log.d("PAobs", observation.take(3500))
+            android.util.Log.i("PAobs", observation.take(3500))
             val o = JSONArray().put(text(observation))
             if (wantImage) { wantImage = false; if (!hearth) screenshotBlock()?.let { o.put(it) } }
             turns.add(Turn(content, ids, briefs, o, raw, observation))

@@ -5,7 +5,7 @@ object Bus {
     @Volatile var listener: (() -> Unit)? = null
 
     fun log(s: String) {
-        android.util.Log.d("PAlog", s.replace("\n", " ⏎ ").take(900))
+        android.util.Log.i("PAlog", s.replace("\n", " ⏎ ").take(900))
         synchronized(lines) { lines.add(s); if (lines.size > 300) lines.removeAt(0) }
         listener?.invoke()
     }
