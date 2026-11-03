@@ -78,9 +78,9 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
             PixelFormat.TRANSLUCENT))
 
         val w = Wave(ctx).also { wave = it }
-        val t1 = TextView(ctx).apply { textSize = 11f; setTextColor(0xFF9AA0A6.toInt()); letterSpacing = 0.06f; isAllCaps = true; title = this }
-        val t2 = TextView(ctx).apply { textSize = 17f; setTextColor(0xFFF1F3F4.toInt()); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setLineSpacing(0f, 1.05f); text = this }
-        val t3 = TextView(ctx).apply { textSize = 12f; setTextColor(0xFF9AA0A6.toInt()); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; sub = this }
+        val t1 = TextView(ctx).apply { textSize = 11f; setTextColor(0xFF9AA0A6.toInt()); letterSpacing = 0.06f; isAllCaps = true }.also { title = it }
+        val t2 = TextView(ctx).apply { textSize = 17f; setTextColor(0xFFF1F3F4.toInt()); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setLineSpacing(0f, 1.05f) }.also { text = it }
+        val t3 = TextView(ctx).apply { textSize = 12f; setTextColor(0xFF9AA0A6.toInt()); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }.also { sub = it }
         val b = Bar(ctx).also { bar = it }
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
