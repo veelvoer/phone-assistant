@@ -46,7 +46,10 @@ class AgentService : AccessibilityService() {
     private val nodes = ArrayList<AccessibilityNodeInfo>()
     @Volatile var running = false; private set
     @Volatile private var stopFlag = false
-    private var overlay: TextView? = null
+    private var ov: Overlay? = null
+    @Volatile private var statusLine = ""
+    @Volatile private var resultText = ""
+    @Volatile private var resultUntil = 0L
     private var wantImage = false
 
     override fun onServiceConnected() {
@@ -113,21 +116,23 @@ class AgentService : AccessibilityService() {
 
     private fun buzz(ms: Long = 40) = (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
 
-    private fun planLine(): String {
-        val cur = todos.firstOrNull { it.status == "doing" } ?: todos.firstOrNull { it.status == "pending" } ?: return ""
-        return " ▶ ${cur.text.take(40)} (${todos.count { it.status == "done" } + 1}/${todos.size})"
+    private fun refreshOverlay() = main.post {
+        val cur = todos.firstOrNull { it.status == "doing" } ?: todos.firstOrNull { it.status == "pending" }
+        val planSub = cur?.let { "${todos.count { t -> t.status == "done" } + 1}/${todos.size} · ${it.text}" }
+        val prog = if (todos.isEmpty()) 0f else (todos.count { it.status == "done" } + 0.3f) / todos.size
+        val fresh = System.currentTimeMillis() < resultUntil
+        val o = ov()
+        when {
+            asking -> o.update(Overlay.State.ASKING, "Question", question, if (voice) partial.ifEmpty { "Say your answer…" } else null, 0f)
+            running -> o.update(Overlay.State.WORKING, if (voice) "Working · listening" else "Working", statusLine.ifEmpty { "Thinking…" },
+                if (voice && partial.isNotEmpty()) "🎤 $partial" else planSub ?: if (voice) "Say something to add or change" else null, prog)
+            voice -> o.update(Overlay.State.LISTENING, if (fresh) "Done" else "Listening", if (partial.isNotEmpty()) partial else if (fresh) resultText else "Say what I should do…", if (fresh) "Listening for your next command" else null, 0f)
+            fresh -> o.update(Overlay.State.INFO, "Done", resultText, null, 0f)
+            else -> { ov?.hide(); ov = null }
+        }
     }
 
-    private fun refreshOverlay() {
-        val t = when {
-            asking -> "❓ $question" + if (voice) "  🎤 " + partial.ifEmpty { "answer me" } else ""
-            voice && running -> "⚙ Working…" + planLine() + "  🎤 " + partial.ifEmpty { "listening" } + " (tap to end)"
-            voice -> "🎤 " + partial.ifEmpty { "Listening…" } + " (tap to end)"
-            running -> "Working…" + planLine() + " (tap to stop)"
-            else -> null
-        }
-        if (t == null) hideOverlay() else showOverlay(t)
-    }
+    private fun showResult(m: String) { resultText = m; resultUntil = System.currentTimeMillis() + 4500; refreshOverlay(); main.postDelayed({ refreshOverlay() }, 4600) }
 
     private fun listen() {
         if (voice) { endSession(true); return }
@@ -169,7 +174,7 @@ class AgentService : AccessibilityService() {
             }
             override fun onReadyForSpeech(p: Bundle?) {}
             override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(v: Float) {}
+            override fun onRmsChanged(v: Float) { ov?.level(v) }
             override fun onBufferReceived(b: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onEvent(t: Int, b: Bundle?) {}
@@ -254,29 +259,11 @@ class AgentService : AccessibilityService() {
     }
 
     // ---------- overlay ----------
-    private fun showOverlay(t: String) = main.post {
-        if (overlay == null) {
-            val tv = TextView(this).apply {
-                setBackgroundColor(0xCCB00020.toInt()); setTextColor(0xFFFFFFFF.toInt()); textSize = 11f
-                setPadding(20, 4, 20, 4); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                maxWidth = (resources.displayMetrics.widthPixels * 0.78).toInt(); setOnClickListener { stop() }
-            }
-            val lp = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT
-            ).apply { gravity = Gravity.TOP or Gravity.END; y = 0 }
-            (getSystemService(WINDOW_SERVICE) as WindowManager).addView(tv, lp)
-            overlay = tv
-        }
-        overlay?.text = t
-    }
+    private fun showOverlay(t: String) = main.post { ov().update(Overlay.State.INFO, "Phone Assistant", t, null, 0f) }
 
-    private fun hideOverlay() = main.post {
-        overlay?.let { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) }
-        overlay = null
-    }
+    private fun hideOverlay() = main.post { ov?.hide(); ov = null }
+
+    private fun ov(): Overlay = ov ?: Overlay(this) { stop() }.also { ov = it }
 
     // ---------- agent loop ----------
     class Cfg(val hearth: Boolean, val url: String, val key: String, val model: String)
@@ -288,6 +275,24 @@ class AgentService : AccessibilityService() {
         noted = true
         notes.add("User said: \"$task\"\n  You did: " + runDid.takeLast(20).joinToString("; ").take(700) + "\n  Result: $result")
         while (notes.size > 4) notes.removeAt(0)
+    }
+
+    private fun friendly(name: String, i: JSONObject, dsc: String): String = when (name) {
+        "open_app" -> "Opening ${i.optString("name")}"
+        "tap", "tap_xy" -> if (dsc.contains('"')) "Tapping " + dsc.substringAfter(' ') else "Tapping"
+        "long_press" -> "Long-pressing"
+        "type" -> "Typing “${i.optString("text").take(40)}”"
+        "find_tap" -> "Looking for “${i.optString("text").take(40)}”"
+        "scroll" -> "Scrolling ${i.optString("direction")}"
+        "swipe" -> "Swiping"
+        "key" -> when (i.optString("key")) { "back" -> "Going back"; "home" -> "Going home"; else -> "Pressing ${i.optString("key")}" }
+        "wait" -> "Waiting…"
+        "read_screen" -> "Reading the screen"
+        "open_url" -> "Opening link"
+        "volume" -> "Setting volume"
+        "ask_user" -> "Asking you"
+        "plan" -> statusLine.ifEmpty { "Planning" }
+        else -> "Working…"
     }
 
     private fun describe(name: String, i: JSONObject): String = when (name) {
@@ -302,12 +307,13 @@ class AgentService : AccessibilityService() {
     private var sessionTask = ""
 
     private fun loop(task: String, cfg: Cfg, cont: Boolean) {
-        extras.clear()
+        extras.clear(); statusLine = ""
         // In a voice session the conversation carries on: a follow-up/correction after "finish" sees everything done so far.
         val turns = if (cont) sessionTurns else ArrayList<Turn>().also { sessionTurns = it }
         var taskText = if (cont) sessionTask + "\nFOLLOW-UP from the user (after you finished; it may correct or extend what you did: use the earlier context, e.g. fix, undo or redo it): $task" else task
         if (cont && turns.isNotEmpty()) { val ob = "The user sent a follow-up (see Task).\n" + observe() + planText(); turns.last().obs = JSONArray().put(text(ob)); turns.last().observation = ob }
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false
+        var model = cfg.model
         val tools = tools()
         val hearth = cfg.hearth
         for (step in 1..60) {
@@ -330,13 +336,14 @@ class AgentService : AccessibilityService() {
                 for (j in t.ids.indices) {
                     val last = lastTurn && j == t.ids.lastIndex
                     val content: Any = if (last) t.obs else t.briefs[j]
-                    res.put(JSONObject().put("type", "tool_result").put("tool_use_id", t.ids[j]).put("content", content))
+                    res.put(JSONObject().put("type", "tool_result").put("tool_use_id", t.ids[j]).put("content", content).also { if (i == turns.lastIndex - 1 && j == t.ids.lastIndex) it.put("cache_control", JSONObject().put("type", "ephemeral")) })
                 }
                 msgs.put(JSONObject().put("role", "user").put("content", res))
             }
-            val body = JSONObject().put("model", cfg.model).put("max_tokens", 1024).put("messages", msgs)
+            val body = JSONObject().put("model", model).put("max_tokens", 1024).put("messages", msgs)
             if (hearth) body.put("system", SYSTEM_TEXT).put("stream", false)
             else body.put("system", JSONArray().put(JSONObject().put("type", "text").put("text", SYSTEM).put("cache_control", JSONObject().put("type", "ephemeral")))).put("tools", tools)
+            statusLine = "Thinking…"; refreshOverlay()
             val resp = Api.post(cfg.url, cfg.key, body)
             val content = resp.getJSONArray("content")
             val raw = (0 until content.length()).map { content.getJSONObject(it) }.filter { it.getString("type") == "text" }.joinToString("\n") { it.getString("text") }
@@ -369,19 +376,22 @@ class AgentService : AccessibilityService() {
                     ids.add(id); briefs.add("Not finished: to-do items still open (" + openTodos().joinToString("; ") { it.text } + "). Complete them, or mark them done/skipped with the plan tool if they are no longer needed. Then finish."); continue
                 }
                 if (name == "finish") {
-                    val m = inp.optString("message"); Bus.log("✅ $m"); addNote(task, m); speak(m)
+                    val m = inp.optString("message"); Bus.log("✅ $m"); addNote(task, m); speak(m); showResult(m)
                     for ((id2, _, _) in calls) if (id2 !in ids) { ids.add(id2); briefs.add(if (id2 == id) "Finished." else "skipped") }
                     turns.add(Turn(content, ids, briefs, JSONArray().put(text("Finished. Waiting for the user's next message.")), raw, "Finished."))
                     return
                 }
                 val dsc = describe(name, inp)
+                statusLine = friendly(name, inp, dsc); refreshOverlay()
                 ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp)); if (dsc.isNotBlank()) runDid.add(dsc)
             }
             settle()
             val scr = observe()
             val h = scr.hashCode()
             var warn = ""
-            if (h == lastHash) { same++; warn = "\n⚠ The screen did NOT change after your last action. Do not repeat it: pick a different element or approach." + if (same >= 2) " You are stuck: call ask_user now." else ""; if (!hearth) wantImage = true } else same = 0
+            if (h == lastHash) { same++; warn = "\n⚠ The screen did NOT change after your last action. Do not repeat it: pick a different element or approach." + if (same >= 2) " You are stuck: call ask_user now." else ""; if (!hearth) wantImage = true
+                if (same >= 2 && !hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; Bus.log("⬆ stuck: switching to a stronger model for this task") }
+            } else same = 0
             lastHash = h
             if (!hearth && nodes.size < 3) wantImage = true
             val observation = briefs.last() + warn + "\n" + scr + planText()
@@ -436,6 +446,7 @@ class AgentService : AccessibilityService() {
         a.put(tool("screenshot", "Attach a screenshot to the next observation. Costly: use only when the element list is empty or insufficient (camera views, images, games).", JSONObject()))
         val item = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string")).put("status", JSONObject().put("type", "string").put("enum", JSONArray(listOf("pending", "doing", "done", "skipped"))))).put("required", JSONArray(listOf("text", "status")))
         a.put(tool("plan", "Create or replace your to-do list (3-8 short concrete steps, in order). Call it together with your next action, at the start of any multi-step task, whenever a step is done/started, and whenever the user changes the plan. Always send the full list.", JSONObject().put("items", JSONObject().put("type", "array").put("items", item)), listOf("items")))
+        a.put(tool("find_tap", "Find an element by its visible text/description (fuzzy, ignores case/accents), scrolling the page if needed, and tap it. Much faster than scrolling and tapping by hand: use for known buttons, contacts, list items, settings.", JSONObject().put("text", p("string")), listOf("text")))
         a.put(tool("open_url", "Open a link or intent directly: https://..., tel:+32..., sms:+32...?body=..., mailto:, geo:0,0?q=place. Opens the dialer (not an auto-call) for tel:.", JSONObject().put("url", p("string")), listOf("url")))
         a.put(tool("volume", "Set volume 0-100 for stream 'media' (default) or 'ring'.", JSONObject().put("level", p("integer")).put("stream", p("string")), listOf("level")))
         a.put(tool("read_screen", "Return ALL visible text on screen untruncated (use to read long messages/articles or answer questions about the screen).", JSONObject()))
@@ -485,6 +496,7 @@ class AgentService : AccessibilityService() {
                     val max = am.getStreamMaxVolume(st); am.setStreamVolume(st, (i.getInt("level") * max / 100).coerceIn(0, max), android.media.AudioManager.FLAG_SHOW_UI); "volume set"
                 }
                 "read_screen" -> readScreen()
+                "find_tap" -> findTap(i.getString("text"))
                 "remember_name" -> {
                     val p = getSharedPreferences("p", MODE_PRIVATE); val ac = i.getString("actual").trim(); val sp = i.optString("spoken").trim()
                     val cur = p.getString("names", "").orEmpty()
@@ -604,6 +616,42 @@ class AgentService : AccessibilityService() {
         return sb.toString()
     }
 
+    private fun norm(x: String) = java.text.Normalizer.normalize(x.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").replace(Regex("\\s+"), " ").trim()
+
+    private fun findTap(q: String): String {
+        val nq = norm(q)
+        if (nq.length < 2) return "error: text too short"
+        val m = resources.displayMetrics; val w = m.widthPixels; val h = m.heightPixels
+        for (attempt in 0..11) {
+            if (stopFlag) return "stopped"
+            var best: AccessibilityNodeInfo? = null; var bs = 0; var bl = 0; var count = 0
+            fun walk(n: AccessibilityNodeInfo) {
+                if (!n.isVisibleToUser) return
+                val t = norm(((n.text ?: n.contentDescription) ?: "").toString())
+                if (t.isNotEmpty()) {
+                    val sc = if (t == nq) 3 else if (t.startsWith(nq)) 2 else if (t.contains(nq)) 1 else 0
+                    if (sc > 0) { count++; if (sc > bs || (sc == bs && t.length < bl)) { best = n; bs = sc; bl = t.length } }
+                }
+                for (k in 0 until n.childCount) n.getChild(k)?.let { walk(it) }
+            }
+            for (win in windows) if (win.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) win.root?.let { if (it.packageName != packageName) walk(it) }
+            val hit = best
+            if (hit != null) {
+                val label = ((hit.text ?: hit.contentDescription) ?: "").toString().take(40)
+                var c: AccessibilityNodeInfo? = hit; var depth = 0
+                while (c != null && !c.isClickable && depth < 6) { c = c.parent; depth++ }
+                val ok = c?.isClickable == true && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (!ok) { val r = Rect(); hit.getBoundsInScreen(r); tapAt(r.centerX(), r.centerY(), 50) }
+                return "tapped \"$label\"" + if (count > 1) " (${count - 1} other matches on screen)" else ""
+            }
+            if (attempt == 11) break
+            if (attempt < 6) swipe(w / 2, h * 7 / 10, w / 2, h * 3 / 10, 300)      // look further down first
+            else { if (attempt == 6) repeat(5) { swipe(w / 2, h * 3 / 10, w / 2, h * 7 / 10, 250); Thread.sleep(250) }; swipe(w / 2, h * 3 / 10, w / 2, h * 7 / 10, 300) }   // then back up and above the start
+            settle()
+        }
+        return "error: \"$q\" not found on screen or after scrolling (try other wording, a screenshot, or ask_user)"
+    }
+
     private fun readScreen(): String {
         val sb = StringBuilder(); var last = ""
         fun walk(n: AccessibilityNodeInfo) {
@@ -643,7 +691,7 @@ private const val RULES = """How to work (follow strictly):
 2. After every action check the new screen: did it do what you intended? If not, try something different (other element, tap_xy, scroll, back, screenshot). Never repeat a failing action more than twice. Keep trying until the goal is reached; don't give up early.
 3. Finish only when the goal is verified done on screen (e.g. the message shows as sent). For multi-part requests do every part.
 4. Ask the user (ask_user) when the request is unclear or doesn't match what you see (e.g. contact not found, two matches, wrong app), when something unexpected blocks you (login, captcha, permission), or after two failed approaches. Ask short, concrete questions. Don't ask when the request is clear: just do it, without asking for confirmation.
-5. Be efficient: fewest steps. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
+5. Be efficient: fewest steps. Use find_tap{text} when you know the label of what to press, even if it is off-screen or in a list. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
 6. The user may interrupt while you work. Lines "User then added (INTERRUPT…): ..." are new instructions: first update the to-do list with plan (add, remove, reorder or replace steps as they ask), then continue with the updated list right away. "Earlier this session" lists previous commands for context.
 7. The user may speak Dutch; match app names as installed; write spoken messages (finish, ask_user) in the user's language.
 8. Names: the request comes from speech recognition, so names are often misspelled or misheard. Match names on screen approximately (ignore case/accents, similar sounds, first name only, partial text). Search with a short partial name rather than the full one. If exactly one plausible match: use it. If several or none: ask_user and read out the options.
@@ -661,7 +709,7 @@ private const val SYSTEM_TEXT = """You control an Android phone to complete the 
 Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
 GOAL: send a snap to Anna. Snapchat isn't open yet. [{"tool":"open_app","name":"Snapchat"}]
 Tools:
-open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{items:[{text,status: pending|doing|done|skipped}]} (your to-do list; send the full list) | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message} (only when the goal is verified done)
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{items:[{text,status: pending|doing|done|skipped}]} (your to-do list; send the full list) | find_tap{text} (finds by text, scrolls if needed, taps) | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message} (only when the goal is verified done)
 No screenshots are available.
 $RULES
 Always end your reply with the JSON array of actions."""
