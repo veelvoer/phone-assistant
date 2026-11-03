@@ -21,7 +21,7 @@ Download from [Releases](../../releases) (tag `desktop-v…`): `Assistant-x.y.z.
 If `/dev/uinput` is not writable for your user: `echo uinput | sudo tee /etc/modules-load.d/uinput.conf`, then `echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/99-uinput.rules`, add yourself to the `input` group and log in again. The app shows what is missing at the top of the Home screen.
 
 ### Hyprland
-Wayland has no global hotkeys for apps, so bind a key in your compositor (Settings → System shows the exact lines and can bind `SUPER+A` for the current session):
+Wayland has no global hotkeys for apps, so on Hyprland the app binds your shortcut through `hyprctl` itself: record it under Settings → Voice → Shortcut (press the keys like in any app) and it is re-applied every time the app starts. For a permanent config entry Settings → System shows the exact lines:
 ```lua
 -- hyprland.lua (Hyprland >= 0.55, Lua config)
 hl.bind("SUPER + A",         hl.dsp.exec_cmd('/path/to/Assistant.AppImage --toggle'))   -- talk

@@ -6,7 +6,7 @@
   <div class="card ask"><textarea id="task" rows="3" placeholder="What should I do on your computer?"></textarea>
     <div class="chips"><span class="chip">Open Firefox and search lofi on YouTube</span><span class="chip">How much disk space is free?</span><span class="chip">Show me where the volume setting is</span></div>
     <div class="row"><button id="mic" class="tonal round" title="Talk (continuous)"></button><button id="run" class="filled grow"></button></div>
-    <p class="hint">Hotkey: <b id="hk"></b> &nbsp;·&nbsp; or <code>assistant --toggle</code> from a compositor key bind</p></div>
+    <p class="hint">Shortcut: <b id="hk"></b> &nbsp;·&nbsp; or <code>assistant --toggle</code> from a compositor key bind</p></div>
   <div class="stats"><div><span>Today</span><b id="sToday">–</b></div><div><span>Credits left</span><b id="sLeft">set in Settings</b></div><div><span>Last task</span><b id="sLast">–</b></div></div>
   <div class="card" id="planCard" hidden><h3>Plan</h3><div id="plan"></div><div class="row"><input id="planIn" placeholder="Change the plan… (or just say it)"><button id="planSend" class="tonal">Send</button></div></div>
   <div class="card"><div class="row"><h3 class="grow">Activity</h3><button id="clear" class="link">Clear</button></div><pre id="log"></pre></div>
@@ -24,7 +24,7 @@
     <div class="seg" id="whisper"><button data-v="base">Speech model: Base (fast)</button><button data-v="small">Small (accurate)</button></div><p class="hint" id="sttInfo">Speech recognition runs on this computer (Whisper). The model downloads once.</p>
     <div class="sw"><div><b>Spoken answers</b><small id="ttsInfo"></small></div><input type="checkbox" id="speak"></div>
     <div class="row"><button id="testVoice" class="tonal">Test voice</button><button id="warm" class="tonal">Download speech model now</button></div>
-    <label>Hotkey (Windows / X11)<input id="hotkey" placeholder="CommandOrControl+Alt+Space"></label></div>
+    <label>Shortcut</label><div class="row"><input id="hotkey" class="grow" readonly><button id="hkRec" class="tonal">Press keys…</button></div><p class="hint" id="hkInfo"></p></div>
   <h2>Memory</h2><div class="card"><label>About you — one short fact per line<textarea id="facts" rows="5" placeholder="I am Warre&#10;mom = Anna Peeters&#10;brother = Lars"></textarea></label><label>Names for speech recognition<input id="names" placeholder="Jan, Sanne, Wout"></label></div>
   <h2>Credits</h2><div class="card"><label>Credit balance ($)<input id="balance" type="number" step="0.01"></label><p class="hint">Anthropic doesn't let apps read your balance. Enter it once (console.anthropic.com → Billing) and the app subtracts what it spends.</p></div>
   <h2>Look</h2><div class="card"><div class="sw"><div><b>Screen glow &amp; highlights</b><small>The full-screen overlay while it works</small></div><input type="checkbox" id="overlay"></div><label>Accent colour (empty = system)<input id="accent" placeholder="#7aa2f7"></label><p class="hint" id="themeInfo"></p></div>

@@ -11,6 +11,7 @@ const { detectAccent } = require('./theme');
 const { Tts } = require('./tts');
 const { Stt, fixNames } = require('./stt');
 const { run, which } = require('./platform/util');
+const { toHypr } = require('./hotkey');
 
 const ARGS = process.argv.slice(1);
 const flag = (f) => ARGS.includes(f);
@@ -39,6 +40,18 @@ async function installHyprRules() {
   }
 }
 
+let hyprBound = '';
+async function bindHypr(accel) {
+  if (!isHypr()) return 'not Hyprland';
+  const cmd = `${launchCommand()} --toggle`; const key = toHypr(accel); if (!key) return 'error: empty key';
+  let lua = '';
+  if (hyprBound && hyprBound !== key) lua += `pcall(function() hl.unbind(${JSON.stringify(hyprBound)}) end) `;
+  lua += `hl.bind(${JSON.stringify(key)}, hl.dsp.exec_cmd(${JSON.stringify(cmd)})) return 1`;
+  const r = await run('hyprctl', ['eval', lua]);
+  if (/error/i.test(r.stdout + r.stderr)) return 'error: ' + (r.stdout + r.stderr).slice(0, 200);
+  hyprBound = key; return 'ok';
+}
+
 function launchCommand() {
   if (process.env.APPIMAGE) return `"${process.env.APPIMAGE}"`;
   return app.isPackaged ? `"${process.execPath}"` : `"${process.execPath}" "${app.getAppPath()}" --no-sandbox`;
@@ -49,7 +62,7 @@ const preload = path.join(__dirname, 'preload.js');
 function baseWebPrefs() { return { preload, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }; }
 
 function createMain() {
-  mainWin = new BrowserWindow({ width: 980, height: 760, minWidth: 760, minHeight: 560, title: 'Assistant', show: !flag('--hidden') && !flag('--toggle') && !flag('--ask'), backgroundColor: nativeTheme.shouldUseDarkColors ? '#16161a' : '#fbfbfd', autoHideMenuBar: true, webPreferences: baseWebPrefs() });
+  mainWin = new BrowserWindow({ width: 980, height: 760, minWidth: 760, minHeight: 560, title: 'Assistant', icon: path.join(__dirname, '..', 'assets', 'icon.png'), show: !flag('--hidden') && !flag('--toggle') && !flag('--ask'), backgroundColor: nativeTheme.shouldUseDarkColors ? '#16161a' : '#fbfbfd', autoHideMenuBar: true, webPreferences: baseWebPrefs() });
   mainWin.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWin.on('close', (e) => { if (!app.isQuitting && tray) { e.preventDefault(); mainWin.hide(); } });
 }
@@ -160,7 +173,7 @@ function registerIpc() {
   ipcMain.handle('cfg:set', async (_e, patch) => {
     config.set(patch);
     if ('accent' in patch) { theme = await detectAccent({ systemPreferences }, config.get('accent')); broadcast('theme', theme, nativeTheme.shouldUseDarkColors); }
-    if ('hotkey' in patch) registerHotkey();
+    if ('hotkey' in patch) { registerHotkey(); if (isHypr() && patch.hotkey) { const r = await bindHypr(patch.hotkey); if (r !== 'ok') broadcast('toast', 'Could not bind in Hyprland: ' + r); } }
     if ('balance' in patch) usage.setBalance(patch.balance);
     if ('whisperModel' in patch || 'lang' in patch) { if (stt.worker) { stt.stop(); } }
     broadcast('usage', usage.summary()); return true;
@@ -172,12 +185,9 @@ function registerIpc() {
   ipcMain.handle('ui:test-voice', () => { speak(config.get('lang') === 'en' ? 'Hi! This is my voice. This is how I sound when I answer you.' : 'Hoi! Dit is mijn stem. Zo klink ik als ik je een antwoord geef.'); return true; });
   ipcMain.handle('ui:warm-stt', () => { stt.start(); return true; });
   ipcMain.handle('sys:check', async () => { const r = []; r.push({ name: 'Screenshots', ok: !!(await platform.screenshot().then(() => true).catch(() => false)) }); return r; });
-  ipcMain.handle('hypr:bind', async (_e, key) => {
-    if (!isHypr()) return 'not Hyprland';
-    const cmd = `${launchCommand()} --toggle`;
-    const r = await run('hyprctl', ['eval', `hl.bind(${JSON.stringify(key || 'SUPER + A')}, hl.dsp.exec_cmd(${JSON.stringify(cmd)})) return 1`]);
-    return /error/i.test(r.stdout + r.stderr) ? 'error: ' + (r.stdout + r.stderr).slice(0, 200) : 'ok';
-  });
+  ipcMain.handle('hypr:bind', async (_e, accel) => bindHypr(accel || config.get('hotkey')));
+  ipcMain.handle('hotkey:hypr', (_e, accel) => toHypr(accel));
+  ipcMain.handle('hotkey:pause', (_e, on) => { try { if (on) globalShortcut.unregisterAll(); else registerHotkey(); } catch { /* ignore */ } return true; });
   ipcMain.on('audio:utterance', (_e, buf) => onUtterance(buf));
   ipcMain.on('audio:level', (_e, v) => { if (!S.loggedLevel && v >= 0) { S.loggedLevel = true; console.log('[assistant] mic level events flowing'); } S.micLevel = v; if (S.voice) send(cardWin, 'level', v); send(fxWin, 'level', v); });
   ipcMain.on('audio:error', (_e, m) => { log('Microphone: ' + m); S.partial = ''; broadcast('toast', 'Microphone: ' + m); });
@@ -242,8 +252,9 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler(() => true);
   registerIpc(); createMain(); createAudio(); await installHyprRules(); registerHotkey();
   nativeTheme.on('updated', () => broadcast('theme', theme, nativeTheme.shouldUseDarkColors));
-  try { tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon.png')).resize({ width: 22, height: 22 })); tray.setToolTip('Assistant'); tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Talk', click: () => toggle() }, { label: 'Open', click: () => { mainWin.show(); } }, { type: 'separator' }, { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } }])); tray.on('click', () => mainWin.show()); } catch { tray = null; }
+  try { tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'tray.png')).resize({ width: 22, height: 22 })); tray.setToolTip('Assistant'); tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Talk', click: () => toggle() }, { label: 'Open', click: () => { mainWin.show(); } }, { type: 'separator' }, { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } }])); tray.on('click', () => mainWin.show()); } catch { tray = null; }
   for (const p of platform.problems()) log('⚠ ' + p);
+  if (isHypr() && config.get('hotkeyBound')) bindHypr(config.get('hotkey'));
   handleArgs(ARGS); setTimeout(() => checkUpdate(false), 4000);
   if (flag('--selftest')) setTimeout(() => selftest(), 1500);
 });

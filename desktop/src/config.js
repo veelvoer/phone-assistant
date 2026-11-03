@@ -7,7 +7,7 @@ const DEFAULTS = {
   hearthUrl: '', hearthKey: '', hearthModel: 'haiku',
   lang: 'nl', speak: true, loud: 1, voiceName: '', whisperModel: 'small',
   facts: '', names: '', aliases: '',
-  hotkey: 'CommandOrControl+Alt+Space', accent: '',
+  hotkey: 'Ctrl+Alt+Space', hotkeyBound: false, accent: '',
   balance: null, spentSince: 0, spentTotal: 0, spentToday: 0, day: '',
   costCap: 0.3, confirmDestructive: true, overlay: true,
 };
