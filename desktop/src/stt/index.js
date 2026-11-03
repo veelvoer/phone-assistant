@@ -1,5 +1,5 @@
 'use strict';
-const { Worker } = require('worker_threads');
+const { fork } = require('child_process');
 const path = require('path');
 const { EventEmitter } = require('events');
 
@@ -8,7 +8,8 @@ class Stt extends EventEmitter {
   constructor(config, cacheDir) { super(); this.config = config; this.cacheDir = cacheDir; this.worker = null; this.pending = new Map(); this.seq = 0; this.ready = false; }
   start() {
     if (this.worker) return;
-    this.worker = new Worker(path.join(__dirname, 'worker.js'), { workerData: { cacheDir: this.cacheDir } });
+    const script = path.join(__dirname, 'proc.js').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
+    this.worker = fork(script, [], { execPath: process.execPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ASSISTANT_STT_CACHE: this.cacheDir }, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
     this.worker.on('message', (m) => {
       if (m.type === 'progress') this.emit('progress', m.value);
       else if (m.type === 'ready') { this.ready = true; this.emit('ready'); }
@@ -16,14 +17,14 @@ class Stt extends EventEmitter {
     });
     this.worker.on('error', (e) => { this.emit('error', e); this.worker = null; this.ready = false; });
     this.worker.on('exit', () => { this.worker = null; this.ready = false; for (const p of this.pending.values()) p.rej(new Error('speech engine stopped')); this.pending.clear(); });
-    this.worker.postMessage({ type: 'load', model: this.config.get('whisperModel') });
+    this.worker.send({ type: 'load', model: this.config.get('whisperModel') });
   }
   language() { const l = this.config.get('lang'); return l === 'nl' ? 'dutch' : l === 'en' ? 'english' : undefined; }
   transcribe(float32) {
     this.start();
-    return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.postMessage({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: this.language() }); });
+    return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.send({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: this.language() }); });
   }
-  stop() { if (this.worker) this.worker.terminate(); }
+  stop() { if (this.worker) this.worker.kill(); }
 }
 
 // replace words that are almost a known name ("Yan" -> "Jan")

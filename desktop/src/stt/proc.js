@@ -1,6 +1,7 @@
 'use strict';
-// Runs Whisper (transformers.js + onnxruntime) off the main thread.
-const { parentPort, workerData } = require('worker_threads');
+// Runs Whisper (transformers.js + onnxruntime) in its own process (Electron-as-Node): onnxruntime must not share the process with Chromium.
+const workerData = { cacheDir: process.env.ASSISTANT_STT_CACHE };
+const parentPort = { postMessage: (m) => process.send(m), on: (_e, f) => process.on('message', f) };
 let asr = null, loadedId = '';
 const MODELS = { base: 'onnx-community/whisper-base', small: 'onnx-community/whisper-small', tiny: 'onnx-community/whisper-tiny' };
 
@@ -30,7 +31,7 @@ parentPort.on('message', async (m) => {
     if (m.type === 'load') { await load(m.model); parentPort.postMessage({ type: 'ready' }); return; }
     if (m.type === 'transcribe') {
       await load(m.model);
-      const audio = new Float32Array(m.audio.buffer ? m.audio.buffer : m.audio);
+      const audio = m.audio instanceof Float32Array ? m.audio : new Float32Array(m.audio.buffer ? m.audio.buffer.slice(m.audio.byteOffset || 0, (m.audio.byteOffset || 0) + (m.audio.byteLength || m.audio.length)) : m.audio);
       const opts = { task: 'transcribe', chunk_length_s: 30 }; if (m.language) opts.language = m.language;
       const out = await asr(audio, opts);
       parentPort.postMessage({ type: 'result', id: m.id, text: String(out.text || '').trim() });
