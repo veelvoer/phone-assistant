@@ -4,9 +4,18 @@ const { parentPort, workerData } = require('worker_threads');
 let asr = null, loadedId = '';
 const MODELS = { base: 'onnx-community/whisper-base', small: 'onnx-community/whisper-small', tiny: 'onnx-community/whisper-tiny' };
 
-async function load(model) {
+const fs = require('fs'); const path = require('path');
+async function load(model, retry) {
   const id = MODELS[model] || MODELS.small;
   if (asr && loadedId === id) return;
+  try { await loadOnce(id); } catch (e) {
+    // an interrupted download leaves a broken file: delete the model folder and fetch it again once
+    if (!retry && /protobuf|corrupt|invalid|parsing failed|unexpected end/i.test(String(e && e.message))) { try { fs.rmSync(path.join(workerData.cacheDir, id), { recursive: true, force: true }); } catch { /* ignore */ } asr = null; return load(model, true); }
+    throw e;
+  }
+}
+
+async function loadOnce(id) {
   const tf = await import('@huggingface/transformers');
   tf.env.cacheDir = workerData.cacheDir; tf.env.allowLocalModels = true;
   const files = {};
