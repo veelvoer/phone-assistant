@@ -89,6 +89,8 @@ class AgentService : AccessibilityService() {
         return "plan updated (${l.count { it.status == "done" }}/${l.size} done)"
     }
 
+    fun startFromPrefs(task: String) { main.post { cfgFromPrefs()?.let { start(task, it) } ?: Bus.log("No API key saved in the app") } }
+
     fun stop() { clearAnn(); stopFlag = true; main.post { endSession(false) } }
 
     // ---------- Essential Key: press and hold to talk ----------
