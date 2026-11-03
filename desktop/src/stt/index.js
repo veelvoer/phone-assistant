@@ -1,0 +1,35 @@
+'use strict';
+const { Worker } = require('worker_threads');
+const path = require('path');
+const { EventEmitter } = require('events');
+
+/** Local speech recognition (Whisper via transformers.js). */
+class Stt extends EventEmitter {
+  constructor(config, cacheDir) { super(); this.config = config; this.cacheDir = cacheDir; this.worker = null; this.pending = new Map(); this.seq = 0; this.ready = false; }
+  start() {
+    if (this.worker) return;
+    this.worker = new Worker(path.join(__dirname, 'worker.js'), { workerData: { cacheDir: this.cacheDir } });
+    this.worker.on('message', (m) => {
+      if (m.type === 'progress') this.emit('progress', m.value);
+      else if (m.type === 'ready') { this.ready = true; this.emit('ready'); }
+      else if (m.type === 'result' || m.type === 'error') { const p = this.pending.get(m.id); if (p) { this.pending.delete(m.id); m.type === 'result' ? p.res(m.text) : p.rej(new Error(m.error)); } }
+    });
+    this.worker.on('error', (e) => { this.emit('error', e); this.worker = null; this.ready = false; });
+    this.worker.on('exit', () => { this.worker = null; this.ready = false; for (const p of this.pending.values()) p.rej(new Error('speech engine stopped')); this.pending.clear(); });
+    this.worker.postMessage({ type: 'load', model: this.config.get('whisperModel') });
+  }
+  language() { const l = this.config.get('lang'); return l === 'nl' ? 'dutch' : l === 'en' ? 'english' : undefined; }
+  transcribe(float32) {
+    this.start();
+    return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.postMessage({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: this.language() }); });
+  }
+  stop() { if (this.worker) this.worker.terminate(); }
+}
+
+// replace words that are almost a known name ("Yan" -> "Jan")
+function lev(a, b) { const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j++) d[0][j] = j; for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; }
+function fixNames(text, names) {
+  const known = names.filter((n) => n.length >= 3);
+  return text.replace(/[\p{L}'-]+/gu, (w) => { const lw = w.toLowerCase(); if (lw.length < 3) return w; for (const n of known) { const ln = n.toLowerCase(); if (ln === lw) return n; const max = ln.length >= 7 ? 2 : ln.length >= 4 ? 1 : 0; if (max && Math.abs(ln.length - lw.length) <= max && lev(ln, lw) <= max) return n; } return w; });
+}
+module.exports = { Stt, fixNames };
