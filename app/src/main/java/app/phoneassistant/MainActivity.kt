@@ -1,265 +1,133 @@
 package app.phoneassistant
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.*
 
 class MainActivity : Activity() {
-    private val night by lazy { resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES }
-    private val bg by lazy { if (night) 0xFF16130F.toInt() else 0xFFFAF7F2.toInt() }
-    private val card by lazy { if (night) 0xFF221E19.toInt() else 0xFFFFFFFF.toInt() }
-    private val fg by lazy { if (night) 0xFFF2EDE6.toInt() else 0xFF1F1B16.toInt() }
-    private val sub by lazy { if (night) 0xFFA39A8E.toInt() else 0xFF6B645B.toInt() }
-    private val accent by lazy { if (night) 0xFFF08A52.toInt() else 0xFFD9622B.toInt() }
-    private val line by lazy { if (night) 0xFF3A342C.toInt() else 0xFFE6DFD4.toInt() }
-    private val danger = 0xFFC62828.toInt()
-    private val ok = 0xFF2E7D32.toInt()
-
+    private lateinit var ui: Ui
     private lateinit var p: android.content.SharedPreferences
-    private var hearth = false
-    private var settingsOpen = false
 
     private lateinit var statusDot: View
     private lateinit var statusText: TextView
     private lateinit var updateCard: LinearLayout
     private lateinit var updateTitle: TextView
     private lateinit var updateNotes: TextView
-    private lateinit var updateBtn: Button
+    private lateinit var updateBtn: LinearLayout
     private lateinit var setupCard: LinearLayout
     private lateinit var task: EditText
-    private lateinit var runBtn: Button
-    private lateinit var settingsBody: LinearLayout
-    private lateinit var settingsArrow: TextView
-    private lateinit var segClaude: Button
-    private lateinit var segHearth: Button
-    private lateinit var url: EditText
-    private lateinit var key: EditText
-    private lateinit var model: EditText
-    private lateinit var keyHint: TextView
+    private lateinit var runBtn: LinearLayout
     private lateinit var planCard: LinearLayout
     private lateinit var planText: TextView
-    private lateinit var names: EditText
-    private lateinit var memory: EditText
-    private lateinit var balance: EditText
-    private lateinit var usageText: TextView
-    private lateinit var usageCard: LinearLayout
-    private lateinit var smartBtn: Button
-    private lateinit var speakBtn: Button
-    private lateinit var langBtns: List<Pair<String, Button>>
+    private lateinit var statToday: TextView
+    private lateinit var statLeft: TextView
+    private lateinit var statLast: TextView
     private lateinit var logCard: LinearLayout
     private lateinit var log: TextView
-    private lateinit var updateStatus: TextView
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
-    private fun bgOf(color: Int, r: Int = 14, stroke: Int? = null) = GradientDrawable().apply {
-        setColor(color); cornerRadius = dp(r).toFloat(); if (stroke != null) setStroke(dp(1), stroke)
-    }
-
-    private fun tv(t: String, size: Float = 14f, color: Int = fg, bold: Boolean = false) = TextView(this).apply {
-        text = t; textSize = size; setTextColor(color); if (bold) setTypeface(typeface, Typeface.BOLD)
-    }
-
-    private fun lp(w: Int = -1, h: Int = -2, top: Int = 0, weight: Float = 0f) =
-        LinearLayout.LayoutParams(w, h, weight).apply { topMargin = dp(top) }
-
-    private fun button(label: String, filled: Boolean = false, f: () -> Unit) = Button(this).apply {
-        text = label; isAllCaps = false; textSize = 14f; stateListAnimator = null
-        setTextColor(if (filled) 0xFFFFFFFF.toInt() else accent)
-        background = if (filled) bgOf(accent, 12) else bgOf(0x00000000, 12, accent)
-        setPadding(dp(14), dp(10), dp(14), dp(10)); minHeight = 0; minimumHeight = dp(44)
-        setOnClickListener { f() }
-    }
-
-    private fun input(hint: String, multi: Boolean = false) = EditText(this).apply {
-        this.hint = hint; textSize = 15f; setTextColor(fg); setHintTextColor(sub)
-        background = bgOf(if (night) 0xFF2B2620.toInt() else 0xFFF4EFE7.toInt(), 12, line)
-        setPadding(dp(14), dp(12), dp(14), dp(12))
-        if (multi) { minLines = 3; gravity = Gravity.TOP; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES } else setSingleLine()
-    }
-
-    private fun cardView(vararg v: View) = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL; background = bgOf(card, 18, line); setPadding(dp(16), dp(16), dp(16), dp(16))
-        layoutParams = lp(top = 14); v.forEach { addView(it) }
-    }
+    private val hearth get() = p.getBoolean("hearth", false)
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         p = getSharedPreferences("p", MODE_PRIVATE)
-        hearth = p.getBoolean("hearth", false)
-        window.statusBarColor = bg; window.navigationBarColor = bg
-        if (!night) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(24), dp(16), dp(24)) }
+        ui = Ui(this); ui.statusBar(this)
+        val c = ui.c
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(ui.dp(20), ui.dp(26), ui.dp(20), ui.dp(32)) }
 
         // header
-        statusDot = View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(10), dp(10)).apply { rightMargin = dp(8); gravity = Gravity.CENTER_VERTICAL } }
-        statusText = tv("", 13f, sub)
-        root.addView(tv("Phone Assistant", 28f, fg, true))
+        statusDot = View(this).apply { layoutParams = LinearLayout.LayoutParams(ui.dp(8), ui.dp(8)).apply { rightMargin = ui.dp(8) } }
+        statusText = ui.tv("", 13f, c.onSurfaceV)
         root.addView(LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL; layoutParams = lp(top = 4)
-            addView(statusDot); addView(statusText)
-            addView(tv("  ·  v${Updater.current(this@MainActivity)}", 13f, sub))
+            gravity = Gravity.CENTER_VERTICAL
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL; layoutParams = ui.lp(0, -2, weight = 1f)
+                addView(ui.tv("Assistant", 32f, c.onSurface, true))
+                addView(LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL; layoutParams = ui.lp(top = 4); addView(statusDot); addView(statusText) })
+            })
+            addView(ui.iconButton(R.drawable.ic_settings, c.surface, c.onSurface) { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) })
         })
 
-        // update card
-        updateTitle = tv("", 16f, fg, true)
-        updateNotes = tv("", 13f, sub).apply { layoutParams = lp(top = 6) }
-        updateBtn = button("Update now", true) { Updater.install(this) }.apply { layoutParams = lp(top = 12) }
-        updateCard = cardView(updateTitle, updateNotes, updateBtn).apply { background = bgOf(card, 18, accent) }
+        // update
+        updateTitle = ui.tv("", 16f, c.onPrimaryC, true)
+        updateNotes = ui.tv("", 13f, c.onPrimaryC).apply { layoutParams = ui.lp(top = 6) }
+        updateBtn = ui.button("Update now", filled = true) { Updater.install(this) }.apply { layoutParams = ui.lp(top = 14) }
+        updateCard = ui.card(updateTitle, updateNotes, updateBtn, bg = c.primaryC)
         root.addView(updateCard)
 
-        // setup card
-        setupCard = cardView(
-            tv("Set up (one time)", 17f, fg, true),
-            tv("Android blocks sideloaded apps from using accessibility until you allow it.", 13f, sub).apply { layoutParams = lp(top = 4) },
-            tv("1. Allow restricted settings", 14f, fg, true).apply { layoutParams = lp(top = 14) },
-            tv("Open App info, tap ⋮ (top right) and choose “Allow restricted settings”. If ⋮ is missing, do step 2 first and tap the greyed-out switch once.", 13f, sub),
-            button("Open App info") { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }.apply { layoutParams = lp(top = 8) },
-            tv("2. Turn on the service", 14f, fg, true).apply { layoutParams = lp(top = 14) },
-            tv("Accessibility → Installed apps → Phone Assistant → On.", 13f, sub),
-            button("Open Accessibility settings", true) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }.apply { layoutParams = lp(top = 8) }
+        // setup
+        fun step(n: String, title: String, text: String, btn: LinearLayout) = LinearLayout(this).apply {
+            layoutParams = ui.lp(top = 16)
+            addView(ui.tv(n, 14f, c.onPrimary, true).apply { gravity = Gravity.CENTER; background = ui.shape(c.primary, 14); layoutParams = ui.lp(ui.dp(28), ui.dp(28), right = 12) })
+            addView(LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; layoutParams = ui.lp(0, -2, weight = 1f)
+                addView(ui.tv(title, 15f, c.onSurface, true)); addView(ui.tv(text, 13f, c.onSurfaceV).apply { layoutParams = ui.lp(top = 2) }); addView(btn.apply { layoutParams = ui.lp(top = 10) }) })
+        }
+        setupCard = ui.card(
+            ui.tv("Set up once", 20f, c.onSurface, true),
+            ui.tv("Android blocks sideloaded apps from using accessibility until you allow it.", 13f, c.onSurfaceV).apply { layoutParams = ui.lp(top = 4) },
+            step("1", "Allow restricted settings", "App info → ⋮ (top right) → Allow restricted settings.", ui.button("Open App info") { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }),
+            step("2", "Turn on the service", "Accessibility → Installed apps → Phone Assistant → On.", ui.button("Open Accessibility", filled = true) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
         )
         root.addView(setupCard)
 
-        // task card
-        task = input("What should I do on your phone?", true)
-        val chips = LinearLayout(this).apply { layoutParams = lp(top = 10) }
-        listOf("Open Snapchat and reply to the newest snap", "Turn on Wi-Fi", "Open YouTube and search lofi").forEach { ex ->
-            chips.addView(tv(ex, 12f, accent).apply {
-                background = bgOf(0x00000000, 20, accent); setPadding(dp(12), dp(6), dp(12), dp(6))
-                layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) }
-                setOnClickListener { task.setText(ex); task.setSelection(ex.length) }
-            })
+        // ask
+        task = EditText(this).apply {
+            hint = "What should I do?"; textSize = 19f; setTextColor(c.onSurface); setHintTextColor(c.onSurfaceV)
+            background = null; minLines = 3; gravity = Gravity.TOP
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         }
-        runBtn = button("Run", true) { onRun() }.apply { layoutParams = lp(0, -2, 0, 1f) }
-        val mic = button("🎤 Speak") {
+        val chips = LinearLayout(this)
+        listOf("Open Snapchat and reply to the newest snap", "Turn on Wi-Fi", "Search lofi on YouTube").forEach { ex -> chips.addView(ui.chip(ex) { task.setText(ex); task.setSelection(ex.length) }) }
+        runBtn = ui.button("Run", R.drawable.ic_play, filled = true) { onRun() }.apply { layoutParams = ui.lp(0, -2, weight = 1f) }
+        val mic = ui.iconButton(R.drawable.ic_mic, c.primaryC, c.onPrimaryC, 52) {
             try { startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).apply { p.getString("lang", "nl-BE")?.takeIf { it.isNotEmpty() }?.let { putExtra(RecognizerIntent.EXTRA_LANGUAGE, it) } }, 1) }
             catch (e: Exception) { Toast.makeText(this, "No speech recognizer on this phone", Toast.LENGTH_SHORT).show() }
-        }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) } }
-        root.addView(cardView(
-            tv("Task", 17f, fg, true), tv("Or press and hold the Essential Key: it keeps listening and does everything you say. Say “stop” or tap the overlay to end.", 12f, sub).apply { layoutParams = lp(top = 2) }, task.apply { layoutParams = lp(top = 10) },
-            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips); layoutParams = lp() },
-            LinearLayout(this).apply { layoutParams = lp(top = 12); addView(mic); addView(runBtn) }
+        }.apply { layoutParams = ui.lp(ui.dp(52), ui.dp(52), right = 10) }
+        root.addView(ui.card(
+            task,
+            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips); layoutParams = ui.lp(top = 8) },
+            LinearLayout(this).apply { layoutParams = ui.lp(top = 14); gravity = Gravity.CENTER_VERTICAL; addView(mic); addView(runBtn) },
+            ui.tv("or hold the Essential Key and just talk", 12f, c.onSurfaceV).apply { gravity = Gravity.CENTER; layoutParams = ui.lp(top = 12) }
         ))
 
-        // plan card
-        planText = tv("", 14f, fg).apply { layoutParams = lp(top = 8) }
-        val planIn = input("Change the plan… (or just say it)")
-        planCard = cardView(
-            tv("Plan", 17f, fg, true), planText,
-            planIn.apply { layoutParams = lp(top = 10) },
-            button("Send change") {
-                val t = planIn.text.toString().trim()
-                if (t.isNotEmpty()) { AgentService.instance?.interrupt(t); planIn.setText("") }
-            }.apply { layoutParams = lp(top = 8) }
+        // plan
+        planText = ui.tv("", 15f, c.onSurface).apply { setLineSpacing(0f, 1.15f); layoutParams = ui.lp(top = 8) }
+        val planIn = ui.field("Change the plan… (or just say it)")
+        planCard = ui.card(
+            ui.tv("Plan", 18f, c.onSurface, true), planText, planIn,
+            ui.button("Send change") { val t = planIn.text.toString().trim(); if (t.isNotEmpty()) { AgentService.instance?.interrupt(t); planIn.setText("") } }.apply { layoutParams = ui.lp(top = 10) }
         )
         root.addView(planCard)
 
-        // usage card
-        usageText = tv("", 14f, fg)
-        usageCard = cardView(tv("Usage", 17f, fg, true), usageText.apply { layoutParams = lp(top = 6) })
-        root.addView(usageCard)
+        // stats
+        fun stat(label: String): Pair<LinearLayout, TextView> {
+            val v = ui.tv("–", 18f, c.onSurface, true)
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; background = ui.shape(c.surface, 22); setPadding(ui.dp(16), ui.dp(14), ui.dp(16), ui.dp(14))
+                layoutParams = ui.lp(0, -2, weight = 1f, right = 8)
+                addView(ui.tv(label, 12f, c.onSurfaceV)); addView(v.apply { layoutParams = ui.lp(top = 2) })
+            } to v
+        }
+        val (t1, v1) = stat("Today"); val (t2, v2) = stat("Credits left"); val (t3, v3) = stat("Last task")
+        statToday = v1; statLeft = v2; statLast = v3
+        root.addView(LinearLayout(this).apply { layoutParams = ui.lp(top = 14); addView(t1); addView(t2); addView(t3.apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = 0 }) })
 
-        // settings card
-        segClaude = button("Claude API") { setProvider(false) }.apply { layoutParams = lp(0, -2, 0, 1f) }
-        segHearth = button("Hearth") { setProvider(true) }.apply { layoutParams = lp(0, -2, 0, 1f) }
-        url = input("Hearth server URL (https://…)").apply { layoutParams = lp(top = 10) }
-        key = input("API key").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; layoutParams = lp(top = 10) }
-        model = input("Model").apply { layoutParams = lp(top = 10) }
-        keyHint = tv("", 12f, sub).apply { layoutParams = lp(top = 8) }
-        updateStatus = tv("", 12f, sub).apply { layoutParams = lp(top = 14) }
-        langBtns = listOf("nl-BE" to "Nederlands", "en-US" to "English", "" to "Auto").map { (c, n) ->
-            c to button(n) { p.edit().putString("lang", c).apply(); render() }.apply { layoutParams = lp(0, -2, 0, 1f) }
-        }
-        val langRow = LinearLayout(this).apply {
-            layoutParams = lp(top = 10)
-            langBtns.forEachIndexed { i, (_, b) -> if (i > 0) addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(b) }
-        }
-        names = input("Names & words you use, comma separated (friends, places…)").apply { layoutParams = lp(top = 6); setText(p.getString("names", "")) }
-        memory = input("e.g.\nI am Warre\nmom = Anna Peeters\nbrother = Lars (Snapchat: lars_v)").apply { layoutParams = lp(top = 6); minLines = 4; gravity = Gravity.TOP
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; setText(p.getString("facts", "")) }
-        balance = input("Credit balance in $ (optional)").apply { layoutParams = lp(top = 6); inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            Usage.left(this@MainActivity)?.let { setText(String.format(java.util.Locale.US, "%.2f", it)) } }
-        speakBtn = button("") { p.edit().putBoolean("speak", !p.getBoolean("speak", true)).apply(); render() }.apply { layoutParams = lp(top = 6) }
-        smartBtn = button("") { p.edit().putBoolean("smartplan", !p.getBoolean("smartplan", true)).apply(); render() }.apply { layoutParams = lp(top = 6) }
-        val modelChips = LinearLayout(this).apply {
-            layoutParams = lp(top = 6)
-            listOf("claude-haiku-5-5" to "Haiku 5.5 · fast", "claude-sonnet-5-5" to "Sonnet 5.5 · smart", "claude-opus-5-5" to "Opus 5.5 · best").forEach { (id, n) ->
-                addView(tv(n, 11f, accent).apply {
-                    background = bgOf(0x00000000, 20, accent); setPadding(dp(10), dp(5), dp(10), dp(5))
-                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) }
-                    setOnClickListener { if (!hearth) model.setText(id) }
-                })
-            }
-        }
-        settingsBody = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; layoutParams = lp(top = 12)
-            addView(LinearLayout(this@MainActivity).apply { addView(segClaude); addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(segHearth) })
-            addView(url); addView(key); addView(model); addView(modelChips); addView(keyHint)
-            addView(tv("Memory: who you are, family, friends", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(memory)
-            addView(tv("One short fact per line. The assistant also adds facts itself, and you can say “onthoud dat mijn moeder Anna heet” (instant and free).", 12f, sub).apply { layoutParams = lp(top = 4) })
-            addView(smartBtn); addView(speakBtn)
-            addView(tv("Credit balance", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(balance)
-            addView(tv("Anthropic doesn't let apps read your balance. Enter it once (console.anthropic.com → Billing) and the app subtracts what it spends.", 12f, sub).apply { layoutParams = lp(top = 4) })
-            addView(tv("Voice language", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(langRow)
-            addView(tv("Names it should recognise", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(names)
-            addView(tv("Helps speech recognition and matching with friends/contacts, e.g. Jan, Sanne, Wout.", 12f, sub).apply { layoutParams = lp(top = 4) })
-            addView(updateStatus)
-            addView(button("Check for updates") { Updater.check(this@MainActivity, true) }.apply { layoutParams = lp(top = 6) })
-        }
-        settingsArrow = tv("▾", 18f, sub)
-        val head = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(tv("Settings", 17f, fg, true).apply { layoutParams = lp(0, -2, 0, 1f) }); addView(settingsArrow)
-            setOnClickListener { settingsOpen = !settingsOpen; render() }
-        }
-        root.addView(cardView(head, settingsBody))
-
-        // activity log
-        log = tv("", 12f, sub).apply { typeface = Typeface.MONOSPACE }
-        logCard = cardView(
-            LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                addView(tv("Activity", 17f, fg, true).apply { layoutParams = lp(0, -2, 0, 1f) })
-                addView(tv("Clear", 13f, accent).apply { setOnClickListener { synchronized(Bus.lines) { Bus.lines.clear() }; render() } })
-            },
-            log.apply { layoutParams = lp(top = 8) }
+        // activity
+        log = ui.tv("", 12f, c.onSurfaceV, mono = true).apply { layoutParams = ui.lp(top = 8) }
+        logCard = ui.card(
+            LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL
+                addView(ui.tv("Activity", 18f, c.onSurface, true).apply { layoutParams = ui.lp(0, -2, weight = 1f) })
+                addView(ui.tv("Clear", 13f, c.primary, true).apply { setPadding(ui.dp(10), ui.dp(6), ui.dp(10), ui.dp(6)); setOnClickListener { synchronized(Bus.lines) { Bus.lines.clear() }; render() } }) },
+            log
         )
         root.addView(logCard)
 
-        setContentView(ScrollView(this).apply { setBackgroundColor(bg); isFillViewport = true; addView(root) })
-
-        loadProvider()
-        settingsOpen = key.text.isEmpty()
-    }
-
-    private fun loadProvider() {
-        key.setText(p.getString(if (hearth) "key_h" else "key", ""))
-        model.setText(p.getString(if (hearth) "model_h" else "model", if (hearth) "haiku" else "claude-haiku-5-5"))
-        url.setText(p.getString("url", ""))
-    }
-
-    private fun saveProvider() {
-        p.edit().putBoolean("hearth", hearth).putString(if (hearth) "key_h" else "key", key.text.toString().trim())
-            .putString(if (hearth) "model_h" else "model", model.text.toString().trim()).putString("url", url.text.toString().trim()).putString("names", names.text.toString().trim()).putString("facts", memory.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")).apply()
-        balance.text.toString().trim().toFloatOrNull()?.let { v -> if (kotlin.math.abs(v - (Usage.left(this) ?: -1f)) > 0.004f) Usage.setBalance(this, v) }
-    }
-
-    private fun setProvider(h: Boolean) {
-        if (h == hearth) return
-        saveProvider(); hearth = h; loadProvider(); render()
+        setContentView(ui.page(root))
     }
 
     private fun onRun() {
@@ -267,57 +135,49 @@ class MainActivity : Activity() {
         if (svc?.running == true) { svc.stop(); return }
         if (svc == null) { Toast.makeText(this, "Finish the setup first", Toast.LENGTH_LONG).show(); return }
         val t = task.text.toString().trim()
-        if (key.text.isBlank()) { settingsOpen = true; render(); Toast.makeText(this, "Add your API key in Settings", Toast.LENGTH_LONG).show(); return }
-        if (hearth && url.text.isBlank()) { settingsOpen = true; render(); Toast.makeText(this, "Add your Hearth server URL", Toast.LENGTH_LONG).show(); return }
+        val key = p.getString(if (hearth) "key_h" else "key", "").orEmpty().trim()
+        if (key.isEmpty() || (hearth && p.getString("url", "").orEmpty().isBlank())) {
+            Toast.makeText(this, "Add your API key in Settings first", Toast.LENGTH_LONG).show(); startActivity(Intent(this, SettingsActivity::class.java)); return
+        }
         if (t.isEmpty()) { Toast.makeText(this, "Describe a task first", Toast.LENGTH_SHORT).show(); return }
-        saveProvider()
-        val u = url.text.toString().trim()
-        if (svc.start(t, AgentService.Cfg(hearth, if (hearth) u else "", key.text.toString().trim(), model.text.toString().trim()))) moveTaskToBack(true)
+        svc.startFromPrefs(t); moveTaskToBack(true)
     }
 
     private fun render() {
+        val c = ui.c
         val svc = AgentService.instance
         val running = svc?.running == true
-        statusDot.background = bgOf(if (svc == null) danger else if (running) accent else ok, 5)
-        statusText.text = if (svc == null) "Setup needed" else if (running) "Working…" else "Ready"
+        statusDot.background = ui.shape(if (svc == null) c.error else if (running) c.primary else c.ok, 4)
+        statusText.text = (if (svc == null) "Setup needed" else if (running) "Working…" else "Ready") + "  ·  v${Updater.current(this)}"
         setupCard.visibility = if (svc == null) View.VISIBLE else View.GONE
 
         val r = Updater.rel
         updateCard.visibility = if (r != null) View.VISIBLE else View.GONE
         if (r != null) {
             updateTitle.text = "Update available: v${r.version}"
-            updateNotes.text = r.notes.lines().map { it.trim().replace(Regex("^[#*\\-\\s]+"), "• ") }.filter { it.length > 2 }.take(5).joinToString("\n")
+            updateNotes.text = r.notes.lines().map { it.trim().replace(Regex("^[#*\\-\\s]+"), "• ") }.filter { it.length > 2 }.take(4).joinToString("\n")
             updateNotes.visibility = if (updateNotes.text.isEmpty()) View.GONE else View.VISIBLE
+            ui.setLabel(updateBtn, if (Updater.progress >= 0) "${Updater.message} ${Updater.progress}%" else if (Updater.busy) Updater.message else "Update now")
             updateBtn.isEnabled = !Updater.busy
-            updateBtn.text = if (Updater.progress >= 0) "${Updater.message} ${Updater.progress}%" else if (Updater.busy) Updater.message else "Update now"
         }
-        updateStatus.text = if (r == null) Updater.message else ""
 
         val td = AgentService.todos
         planCard.visibility = if (td.isEmpty()) View.GONE else View.VISIBLE
-        planText.text = td.joinToString("\n") { (when (it.status) { "done" -> "✓ "; "doing" -> "▶ "; "skipped" -> "– "; else -> "○ " }) + it.text }
-        runBtn.text = if (running) "Stop" else "Run"
-        runBtn.background = bgOf(if (running) danger else accent, 12)
+        planText.text = td.joinToString("\n") { (when (it.status) { "done" -> "✓  "; "doing" -> "▶  "; "skipped" -> "–  "; else -> "○  " }) + it.text }
 
-        settingsBody.visibility = if (settingsOpen) View.VISIBLE else View.GONE
-        settingsArrow.text = if (settingsOpen) "▴" else "▾"
-        fun seg(b: Button, on: Boolean) { b.setTextColor(if (on) 0xFFFFFFFF.toInt() else accent); b.background = if (on) bgOf(accent, 12) else bgOf(0x00000000, 12, accent) }
-        seg(segClaude, !hearth); seg(segHearth, hearth)
-        val lang = p.getString("lang", "nl-BE")
-        langBtns.forEach { (c, b) -> seg(b, c == lang) }
-        url.visibility = if (hearth) View.VISIBLE else View.GONE
-        key.hint = if (hearth) "Hearth API key" else "Claude API key (sk-ant-…)"
-        keyHint.text = if (hearth) "Don't have a Claude key? Use your Hearth server: model haiku, sonnet or opus. Text-only, so no screenshots." else "Get a key at console.anthropic.com. Haiku is cheapest and fastest."
+        ui.setLabel(runBtn, if (running) "Stop" else "Run")
+        runBtn.background = ui.ripple(0, ui.shape(if (running) c.error else c.primary, 26))
+        (runBtn.getChildAt(0) as? ImageView)?.apply { setImageResource(if (running) R.drawable.ic_stop else R.drawable.ic_play) }
 
-        speakBtn.text = if (p.getBoolean("speak", true)) "✓ Spoken answers (silent during calls)" else "Spoken answers off (tap to turn on)"
-        smartBtn.text = if (p.getBoolean("smartplan", true)) "✓ Smart planning: Sonnet plans, Haiku executes" else "Smart planning off (tap to turn on)"
         val left = Usage.left(this)
-        usageText.text = (if (left != null) "Credits left ≈ ${Usage.money(left.toDouble())}\n" else "") +
-            (if (Usage.calls > 0) "Last task: ${Usage.taskLine(hearth)}\n" else "") +
-            if (hearth) "Using your Hearth plan (no API credits)" else "Today ≈ ${Usage.money(Usage.today(this).toDouble())} · Total ≈ ${Usage.money(Usage.total(this).toDouble())}"
-        val t = Bus.text()
-        logCard.visibility = if (t.isEmpty()) View.GONE else View.VISIBLE
-        log.text = t
+        statToday.text = if (hearth) "plan" else Usage.money(Usage.today(this).toDouble())
+        statLeft.text = if (hearth) "–" else if (left != null) Usage.money(left.toDouble()) else "set in Settings"
+        statLeft.textSize = if (left == null && !hearth) 13f else 18f
+        statLast.text = if (Usage.calls > 0) (if (hearth) Usage.k(Usage.taskIn + Usage.taskOut) + " tok" else Usage.money(Usage.taskCost)) else "–"
+
+        val lines = synchronized(Bus.lines) { Bus.lines.takeLast(9) }
+        logCard.visibility = if (lines.isEmpty()) View.GONE else View.VISIBLE
+        log.text = lines.joinToString("\n") { it.lineSequence().first().take(120) }
     }
 
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
@@ -327,11 +187,10 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        Bus.listener = { runOnUiThread { render() } }
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 2)
-        if (!memory.hasFocus()) memory.setText(p.getString("facts", ""))
+        Bus.listener = { runOnUiThread { render() } }
         render(); Updater.check(this)
     }
 
-    override fun onPause() { super.onPause(); saveProvider(); Bus.listener = null }
+    override fun onPause() { super.onPause(); Bus.listener = null }
 }

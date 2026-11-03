@@ -71,7 +71,7 @@ class AgentService : AccessibilityService() {
         override fun run() {
             if ((voice || speaking || running || ov != null) && inCall()) {
                 Bus.log("📞 call detected: assistant stopped")
-                tts?.stop(); speaking = false; abandonFocus()
+                tts?.stop(); speaking = false; abandonFocus(); boostEnd()
                 stopFlag = true; endSession(true); hideOverlay()
             }
             main.postDelayed(this, 800)
@@ -93,8 +93,8 @@ class AgentService : AccessibilityService() {
         tts = TextToSpeech(this) { ttsReady = it == TextToSpeech.SUCCESS }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {}
-            override fun onDone(id: String?) { main.post { speaking = false; abandonFocus(); if (voice) startRec() } }
-            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; abandonFocus(); if (voice) startRec() } }
+            override fun onDone(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec() } }
+            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec() } }
         })
     }
     @Volatile private var lastEvent = 0L
@@ -277,11 +277,46 @@ class AgentService : AccessibilityService() {
 
     private fun bestVoice(e: TextToSpeech, loc: Locale): android.speech.tts.Voice? {
         val online = (getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).activeNetwork != null
+        val picked = getSharedPreferences("p", MODE_PRIVATE).getString("ttsvoice", "").orEmpty()
+        if (picked.isNotEmpty()) try { e.voices.orEmpty().firstOrNull { it.name == picked }?.let { return it } } catch (x: Exception) { }
         return try {
             e.voices.orEmpty().filter { it.locale.language == loc.language && !it.features.orEmpty().contains("notInstalled") && (online || !it.isNetworkConnectionRequired) }
                 .sortedWith(compareByDescending<android.speech.tts.Voice> { it.locale.country == loc.country || loc.country.isEmpty() }.thenByDescending { it.quality }.thenByDescending { it.latency * -1 }).firstOrNull()
         } catch (x: Exception) { null }
     }
+
+    private var enhancer: android.media.audiofx.LoudnessEnhancer? = null
+    private var savedVol = -1
+
+    private fun boostEnd() {
+        try { enhancer?.release() } catch (x: Exception) { }
+        enhancer = null
+        if (savedVol >= 0) { try { audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, savedVol, 0) } catch (x: Exception) { }; savedVol = -1 }
+    }
+
+    /** The text-to-speech voice is quiet by default: lift the media volume while it speaks and add gain. */
+    private fun boostStart(sessionId: Int) {
+        val level = getSharedPreferences("p", MODE_PRIVATE).getInt("loud", 1)
+        if (level == 0) return
+        try {
+            val max = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC); val cur = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+            val want = (max * (if (level >= 2) 0.9 else 0.7)).toInt()
+            if (cur < want) { savedVol = cur; audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, want, 0) }
+        } catch (x: Exception) { }
+        try { enhancer = android.media.audiofx.LoudnessEnhancer(sessionId).apply { setTargetGain(if (level >= 2) 1800 else 1000); enabled = true } } catch (x: Exception) { }
+    }
+
+    /** Make written text sound right when read aloud. */
+    private fun speechText(t: String): String {
+        var x = t.replace(Regex("[*_`#>]+"), "").replace(Regex("[\\p{So}\\p{Cn}]"), "").replace(Regex("\\s+"), " ").trim()
+        val nl = langTag().startsWith("nl") || (langTag().isEmpty() && Locale.getDefault().language == "nl")
+        val m = if (nl) listOf("GB" to "gigabyte", "MB" to "megabyte", "KB" to "kilobyte", "km/u" to "kilometer per uur", "km/h" to "kilometer per uur", "°C" to " graden Celsius", "%" to " procent", "€" to " euro ", "Wi-Fi" to "wifi", "WiFi" to "wifi", "&" to " en ", "~" to " ongeveer ")
+                 else listOf("GB" to "gigabytes", "MB" to "megabytes", "km/h" to "kilometers per hour", "°C" to " degrees Celsius", "%" to " percent", "€" to " euros ", "&" to " and ", "~" to " about ")
+        m.forEach { (a, b) -> x = x.replace(a, b) }
+        return x.replace(Regex("\\s+"), " ").trim()
+    }
+
+    fun testVoice() { speak(if (langTag().startsWith("nl") || (langTag().isEmpty() && Locale.getDefault().language == "nl")) "Hoi! Dit is mijn stem. Zo klink ik als ik je een antwoord geef." else "Hi! This is my voice. This is how I sound when I answer you.") }
 
     private fun speak(t: String) = main.post {
         val e = tts ?: return@post
@@ -291,12 +326,15 @@ class AgentService : AccessibilityService() {
         e.language = loc
         bestVoice(e, loc)?.let { e.voice = it }
         e.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANT).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
-        e.setSpeechRate(1.05f); e.setPitch(1.0f)
+        e.setSpeechRate(1.0f); e.setPitch(1.0f)
         takeFocus()
-        val txt = t.take(600)
-        if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, null, "u") != TextToSpeech.SUCCESS) { speaking = false; abandonFocus(); if (voice) startRec(); return@post }
+        val sid = audio.generateAudioSessionId()
+        boostEnd(); boostStart(sid)
+        val params = Bundle().apply { putInt(TextToSpeech.Engine.KEY_PARAM_SESSION_ID, sid); putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f) }
+        val txt = speechText(t).take(700)
+        if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, params, "u") != TextToSpeech.SUCCESS) { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); return@post }
         // never stay deaf if the "done" callback gets lost
-        main.postDelayed({ if (speaking) { speaking = false; abandonFocus(); if (voice) startRec() } }, 2000L + txt.length * 90L)
+        main.postDelayed({ if (speaking) { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec() } }, 2500L + txt.length * 80L)
     }
 
     /** Blocks the agent thread until the user answers by voice. */
@@ -970,7 +1008,7 @@ class AgentService : AccessibilityService() {
         return "highlighted ${list.size} box(es)" + if (notes.isEmpty()) "" else "; " + notes.joinToString("; ") + ". Check the screenshot: if an outline is not exactly on the right thing, call highlight again with text/substring."
     }
 
-    private fun spoken(m: String): String { val f = m.trim().split(Regex("(?<=[.!?])\\s+")).first(); return if (f.length <= 170) f else f.take(170) }
+    private fun spoken(m: String): String { val ss = m.trim().split(Regex("(?<=[.!?])\\s+")); var o = ss.first(); if (ss.size > 1 && (o + " " + ss[1]).length <= 280) o += " " + ss[1]; return o.take(300) }
 
     /** Tap several elements by their visible label in order (digits, keypad, dialer): resolved live, so no id mix-ups. */
     private fun tapLabels(arr: JSONArray): String {
@@ -1043,7 +1081,7 @@ private const val RULES = """How to work (follow strictly):
 4. Ask the user (ask_user) when the request is unclear or doesn't match what you see (e.g. contact not found, two matches, wrong app), when something unexpected blocks you (login, captcha, permission), or after two failed approaches. Ask short, concrete questions. Don't ask when the request is clear: just do it, without asking for confirmation.
 5. Be efficient: fewest steps. For a sequence of buttons (calculator, keypad, dialer) use ONE tap_labels call with the exact labels from the list; never tap digits by guessing ids. Use find_tap{text} when you know the label of what to press, even if it is off-screen or in a list. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.
 6. The user may interrupt while you work. Lines "User then added (INTERRUPT…): ..." are new instructions: first update the to-do list with plan (add, remove, reorder or replace steps as they ask), then continue with the updated list right away. "Earlier this session" lists previous commands for context.
-7. The user may speak Dutch; match app names as installed; write spoken messages (finish, ask_user) in the user's language.
+7. The user may speak Dutch; match app names as installed. Spoken messages (finish.message, ask_user.question) are READ ALOUD by a voice: write natural, warm, complete sentences in the user's language (1-2 sentences, at most ~35 words), answer or result first, like a helpful person talking, not like a log. No markdown, emoji, lists, ids or technical words. Write numbers and units the way you say them ("3,14 gigabyte", "kwart over acht", "20 procent", "twee wekkers"). Ask questions naturally and briefly ("Bedoel je Jan Peeters of Jan Claes?").
 8. Names: the request comes from speech recognition, so names are often misspelled or misheard. Match names on screen approximately (ignore case/accents, similar sounds, first name only, partial text). Search with a short partial name rather than the full one. If exactly one plausible match: use it. If several or none: ask_user and read out the options.
 8b. Memory: "About the user" lists saved facts. Use them to resolve "mijn moeder", "mijn broer", "ik" etc. (look up the NAME from the facts in the app). When the user states a new lasting fact (who someone is, a name, preference, address) call remember with a very short fact; if a fact is wrong, forget it and remember the right one. Never save temporary or sensitive things (passwords, codes).
 9. Dropdowns, suggestion lists and dialogs appear as an extra "-- window --" section in the list: after typing into a search/recipient field, look there and tap the right entry. Recipient/contact search: type a SHORT distinctive part (3-5 letters of the last name, or the first name), wait for the suggestions, pick the entry that best matches (check class/extra info the user mentioned). If nothing matches try another spelling or the other part of the name (swap first/last, ij/y, ph/f, c/k, double letters), up to 4 attempts, then ask_user. After picking, verify the recipient shows in the field, and call remember_name if the real name differs from what was said.

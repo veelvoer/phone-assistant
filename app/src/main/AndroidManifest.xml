@@ -9,7 +9,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
     <application
-        android:label="Phone Assistant"
+        android:label="Assistant"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.DeviceDefault.DayNight">
@@ -23,6 +23,7 @@
             <intent-filter><action android:name="app.phoneassistant.RUN" /><action android:name="app.phoneassistant.STOP" /></intent-filter>
         </receiver>
         <receiver android:name=".InstallReceiver" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
         <service
             android:name=".AgentService"
             android:exported="true"
