@@ -291,7 +291,7 @@ class AgentService : AccessibilityService() {
     }
 
     private fun describe(name: String, i: JSONObject): String = when (name) {
-        "tap", "long_press" -> "$name " + (if (i.has("id")) nodes.getOrNull(i.getInt("id"))?.let { n -> ((n.text ?: n.contentDescription) ?: n.className)?.toString()?.take(40)?.let { "\"$it\"" } } else null ?: "${i.optInt("x")},${i.optInt("y")}")
+        "tap", "long_press" -> "$name " + ((if (i.has("id")) nodes.getOrNull(i.getInt("id"))?.let { n -> ((n.text ?: n.contentDescription) ?: n.className)?.toString()?.take(40)?.let { "\"$it\"" } } else null) ?: (if (i.has("id")) "#${i.optInt("id")}" else "${i.optInt("x")},${i.optInt("y")}"))
         "type" -> "type \"${i.optString("text").take(60)}\""
         "open_app" -> "open ${i.optString("name")}"
         "plan", "wait", "read_screen" -> ""
