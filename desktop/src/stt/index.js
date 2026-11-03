@@ -8,7 +8,7 @@ class Stt extends EventEmitter {
   constructor(config, cacheDir) { super(); this.config = config; this.cacheDir = cacheDir; this.worker = null; this.pending = new Map(); this.seq = 0; this.ready = false; }
   start() {
     if (this.worker) return;
-    const script = path.join(__dirname, 'proc.js').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
+    const script = path.join(__dirname, 'proc.js');   // inside the asar: Electron-as-Node reads it, and finds node_modules next to it
     this.worker = fork(script, [], { execPath: process.execPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ASSISTANT_STT_CACHE: this.cacheDir }, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
     this.worker.on('message', (m) => {
       if (m.type === 'progress') this.emit('progress', m.value);
