@@ -58,7 +58,8 @@ class AgentService : AccessibilityService() {
             @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; if (voice) startRec() } }
         })
     }
-    override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
+    @Volatile private var lastEvent = 0L
+    override fun onAccessibilityEvent(e: AccessibilityEvent?) { lastEvent = android.os.SystemClock.uptimeMillis() }
     override fun onInterrupt() {}
     override fun onDestroy() { instance = null; super.onDestroy() }
 
@@ -193,7 +194,10 @@ class AgentService : AccessibilityService() {
         if (!ttsReady || t.isBlank()) return@post
         speaking = true; rec?.cancel(); rec?.destroy(); rec = null
         val tag = langTag(); e.language = if (tag.isEmpty()) Locale.getDefault() else Locale.forLanguageTag(tag)
-        e.speak(t.take(600), TextToSpeech.QUEUE_FLUSH, null, "u")
+        val txt = t.take(600)
+        if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, null, "u") != TextToSpeech.SUCCESS) { speaking = false; if (voice) startRec(); return@post }
+        // never stay deaf if the "done" callback gets lost
+        main.postDelayed({ if (speaking) { speaking = false; if (voice) startRec() } }, 2000L + txt.length * 90L)
     }
 
     /** Blocks the agent thread until the user answers by voice. */
@@ -230,12 +234,14 @@ class AgentService : AccessibilityService() {
     fun start(task: String, cfg: Cfg): Boolean {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { start(task, cfg) }; return true }
         if (running) return false
-        val cont = voice && sessionTurns.isNotEmpty()
+        val cont = false
         running = true; stopFlag = false; if (!cont) todos = emptyList()
         refreshOverlay(); Bus.listener?.invoke()
         Bus.log("▶ $task")
         thread {
-            try { loop(task, cfg, cont) } catch (e: Exception) { Bus.log("Error: ${e.message}") }
+            runDid = ArrayList(); noted = false
+            try { loop(task, cfg, cont) } catch (e: Throwable) { Bus.log("Error: ${e.message ?: e.javaClass.simpleName}") }
+            if (!noted) addNote(task, "(did not finish: stopped or failed)")
             running = false; Bus.listener?.invoke()
             main.post {
                 refreshOverlay()
@@ -275,6 +281,23 @@ class AgentService : AccessibilityService() {
     // ---------- agent loop ----------
     class Cfg(val hearth: Boolean, val url: String, val key: String, val model: String)
     private class Turn(val assistant: JSONArray, val ids: List<String>, val briefs: List<String>, var obs: JSONArray, val raw: String, var observation: String)
+    private var runDid = ArrayList<String>()
+    private var noted = false
+
+    private fun addNote(task: String, result: String) {
+        noted = true
+        notes.add("User said: \"$task\"\n  You did: " + runDid.takeLast(20).joinToString("; ").take(700) + "\n  Result: $result")
+        while (notes.size > 4) notes.removeAt(0)
+    }
+
+    private fun describe(name: String, i: JSONObject): String = when (name) {
+        "tap", "long_press" -> "$name " + (if (i.has("id")) nodes.getOrNull(i.getInt("id"))?.let { n -> ((n.text ?: n.contentDescription) ?: n.className)?.toString()?.take(40)?.let { "\"$it\"" } } else null ?: "${i.optInt("x")},${i.optInt("y")}")
+        "type" -> "type \"${i.optString("text").take(60)}\""
+        "open_app" -> "open ${i.optString("name")}"
+        "plan", "wait", "read_screen" -> ""
+        else -> "$name ${i.toString().take(60)}"
+    }
+
     private var sessionTurns = ArrayList<Turn>()
     private var sessionTask = ""
 
@@ -292,7 +315,7 @@ class AgentService : AccessibilityService() {
             sessionTask = taskText
             while (turns.size > 40) turns.removeAt(0)
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty() || cont) "" else "Earlier this session:\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
+            val firstText = (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty()) "" else "Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
@@ -346,12 +369,13 @@ class AgentService : AccessibilityService() {
                     ids.add(id); briefs.add("Not finished: to-do items still open (" + openTodos().joinToString("; ") { it.text } + "). Complete them, or mark them done/skipped with the plan tool if they are no longer needed. Then finish."); continue
                 }
                 if (name == "finish") {
-                    val m = inp.optString("message"); Bus.log("✅ $m"); notes.add("\"$task\" → $m"); if (notes.size > 6) notes.removeAt(0); speak(m)
+                    val m = inp.optString("message"); Bus.log("✅ $m"); addNote(task, m); speak(m)
                     for ((id2, _, _) in calls) if (id2 !in ids) { ids.add(id2); briefs.add(if (id2 == id) "Finished." else "skipped") }
                     turns.add(Turn(content, ids, briefs, JSONArray().put(text("Finished. Waiting for the user's next message.")), raw, "Finished."))
                     return
                 }
-                ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp))
+                val dsc = describe(name, inp)
+                ids.add(id); briefs.add(if (hearth && name == "screenshot") "error: screenshots unavailable" else exec(name, inp)); if (dsc.isNotBlank()) runDid.add(dsc)
             }
             settle()
             val scr = observe()
@@ -371,9 +395,9 @@ class AgentService : AccessibilityService() {
 
     /** Wait until the screen stops changing (pages load, animations end), at most ~2 s. */
     private fun settle() {
-        Thread.sleep(500)
-        var prev = observe().hashCode()
-        for (k in 1..3) { Thread.sleep(350); val h = observe().hashCode(); if (h == prev) break; prev = h }
+        Thread.sleep(400)
+        var waited = 0
+        while (android.os.SystemClock.uptimeMillis() - lastEvent < 350 && waited < 2200) { Thread.sleep(100); waited += 100 }
     }
 
     /** Hearth has no tool calling: the model answers with a JSON array of actions like [{"tool":"tap","id":3}]. */
@@ -626,7 +650,7 @@ private const val RULES = """How to work (follow strictly):
 9. Dropdowns, suggestion lists and dialogs appear as an extra "-- window --" section in the list: after typing into a search/recipient field, look there and tap the right entry. Recipient/contact search: type a SHORT distinctive part (3-5 letters of the last name, or the first name), wait for the suggestions, pick the entry that best matches (check class/extra info the user mentioned). If nothing matches try another spelling or the other part of the name (swap first/last, ij/y, ph/f, c/k, double letters), up to 4 attempts, then ask_user. After picking, verify the recipient shows in the field, and call remember_name if the real name differs from what was said.
 10. Several elements can share one label (e.g. icon buttons): then use a screenshot, and tap by position. Before an irreversible send/post: verify recipient, subject and text on screen (screenshot if unsure), send, then verify it was sent (screen changed, "verzonden"/sent state). If the user gave no subject, write a short fitting one yourself; don't ask.
 11. App notes — Smartschool (be.smartschool.mobile): Berichten → "Nieuw bericht" at the bottom. In the compose screen the three header icons are ALL labeled "Verstuur": left = attach, MIDDLE (paper plane, around x=890,y=200 on a 1080-wide screen) = SEND, right = schedule. Fields: "Aan:" (recipient, shows a suggestions dropdown as "Firstname Lastname - Class"), "Onderwerp" (subject), then the message body (separate field). Recipient format when you type: try the last name or first name part.
-12. Follow-ups and corrections: after you finish, the user may say things like "no, I meant Jan", "undo that", "also send it to Els", "that's wrong". You still have the whole earlier conversation: work out what you did, then fix it (edit, delete/unsend, redo with the correction) and verify. Never answer "I can't" before trying: look at the screen and find a way. Short spoken answers: if the user asked a question, put the answer in the finish message (use read_screen to read long texts).
+12. Follow-ups and corrections: after a command the user may say "no, I meant Jan", "undo that", "also send it to Els", "that's wrong". The section "Earlier commands this session" shows what you did; judge from the current screen what state things are in, then do the new request or fix it (edit, delete/unsend, redo with the correction) and verify. A new message is ALWAYS a new job: do it, never reply that it is already done. Never answer "I can't" before trying: look at the screen and find a way. Short spoken answers: if the user asked a question, put the answer in the finish message (use read_screen to read long texts).
 13. Do everything the user says: it is their own phone. Enter details they gave you. Use open_url for calls (dialer), texts, maps and links, key quick_settings for toggles, volume for sound. If an element is missing from the list, use a screenshot and tap_xy. If an app is stuck or crashed: key back/home and reopen it."""
 
 private const val SYSTEM = """You control an Android phone via tools to complete the user's request. Each turn you receive a compact list of on-screen elements: [id] Class "text" desc="..." flags(c=clickable,e=editable,s=scrollable,k=checked,f=focused) @centerX,centerY.

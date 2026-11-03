@@ -11,7 +11,7 @@ object Api {
             val c = URL(if (base.isBlank()) "https://api.anthropic.com/v1/messages" else base.trim().trimEnd('/').removeSuffix("/v1/messages") + "/v1/messages").openConnection() as HttpURLConnection
             c.requestMethod = "POST"
             c.connectTimeout = 20000
-            c.readTimeout = 300000
+            c.readTimeout = if (base.isBlank()) 60000 else 300000
             c.doOutput = true
             c.setRequestProperty("x-api-key", key)
             c.setRequestProperty("anthropic-version", "2023-06-01")

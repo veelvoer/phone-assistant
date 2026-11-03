@@ -9,8 +9,8 @@ android {
         applicationId = "app.phoneassistant"
         minSdk = 30
         targetSdk = 34
-        versionCode = 13
-        versionName = "1.9.1"
+        versionCode = 14
+        versionName = "1.9.2"
     }
     val ks = System.getenv("KEYSTORE_FILE")
     if (ks != null) signingConfigs.create("release") {
