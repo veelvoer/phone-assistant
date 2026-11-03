@@ -59,14 +59,17 @@ class Annotations(private val ctx: Context) {
 
         override fun onDraw(cv: Canvas) {
             val w = width.toFloat(); val hh = height.toFloat()
+            val loc = IntArray(2); getLocationOnScreen(loc)   // our window may start below the status bar / cutout: draw in true screen coordinates
+            val ox = loc[0].toFloat(); val oy = loc[1].toFloat()
+            fun box(r: RectF) = RectF(r).apply { offset(-ox, -oy); inset(-6 * d, -6 * d) }
             val sc = cv.saveLayer(0f, 0f, w, hh, null)
             cv.drawColor(0x80000000.toInt())
             val pad = 6 * d
-            for (it in items) cv.drawRoundRect(RectF(it.rect).apply { inset(-pad, -pad) }, 16 * d, 16 * d, clear)
+            for (it in items) cv.drawRoundRect(box(it.rect), 16 * d, 16 * d, clear)
             cv.restoreToCount(sc)
             val pulse = 0.5f + 0.5f * sin(t)
             for (it in items) {
-                val r = RectF(it.rect).apply { inset(-pad, -pad) }
+                val r = box(it.rect)
                 ring.color = pal.a300; ring.alpha = (60 + 60 * pulse).toInt(); ring.strokeWidth = 9 * d
                 cv.drawRoundRect(r, 16 * d, 16 * d, ring)
                 ring.color = pal.a200; ring.alpha = 255; ring.strokeWidth = 3 * d

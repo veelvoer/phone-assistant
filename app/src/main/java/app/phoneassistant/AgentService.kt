@@ -44,6 +44,7 @@ class AgentService : AccessibilityService() {
     class Todo(val text: String, val status: String)
 
     private val main = Handler(Looper.getMainLooper())
+    private val plainClasses = setOf("TextView", "View", "ViewGroup", "FrameLayout", "LinearLayout", "RelativeLayout", "ConstraintLayout", "LinearLayoutCompat")
     private val nodes = ArrayList<AccessibilityNodeInfo>()
     private val rects = ArrayList<Rect>()
     @Volatile var running = false; private set
@@ -51,6 +52,7 @@ class AgentService : AccessibilityService() {
     private var ov: Overlay? = null
     @Volatile private var statusLine = ""
     @Volatile private var goal = ""
+    private val wantImageLock = false
     @Volatile private var doneWhen = ""
     private var ann: Annotations? = null
     private fun clearAnn() = main.post { ann?.hide(); ann = null }
@@ -245,7 +247,8 @@ class AgentService : AccessibilityService() {
     fun start(task: String, cfg: Cfg): Boolean {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { start(task, cfg) }; return true }
         if (running) return false
-        clearAnn()
+        clearAnn(); Usage.beginTask()
+        if (shortcut(task)) return true
         val cont = false
         running = true; stopFlag = false; if (!cont) todos = emptyList()
         refreshOverlay(); Bus.listener?.invoke()
@@ -254,6 +257,7 @@ class AgentService : AccessibilityService() {
             runDid = ArrayList(); noted = false
             try { loop(task, cfg, cont) } catch (e: Throwable) { Bus.log("Error: ${e.message ?: e.javaClass.simpleName}") }
             if (!noted) addNote(task, "(did not finish: stopped or failed)")
+            Bus.log("💰 " + Usage.taskLine(cfg.hearth))
             running = false; Bus.listener?.invoke()
             main.post {
                 refreshOverlay()
@@ -282,6 +286,28 @@ class AgentService : AccessibilityService() {
         noted = true
         notes.add("User said: \"$task\"\n  You did: " + runDid.takeLast(20).joinToString("; ").take(700) + "\n  Result: $result")
         while (notes.size > 4) notes.removeAt(0)
+    }
+
+    /** Trivial commands run locally: zero tokens, instant. */
+    private fun shortcut(task: String): Boolean {
+        val t = task.lowercase().replace(Regex("[^\\p{L}\\p{N} ]"), "").trim()
+        val act: (() -> String)? = when {
+            t in setOf("home", "ga naar home", "startscherm", "ga naar het startscherm", "go home") -> { { performGlobalAction(GLOBAL_ACTION_HOME); "Home" } }
+            t in setOf("terug", "ga terug", "back", "go back") -> { { performGlobalAction(GLOBAL_ACTION_BACK); "Back" } }
+            t in setOf("recente apps", "recents", "recent apps", "toon recente apps") -> { { performGlobalAction(GLOBAL_ACTION_RECENTS); "Recents" } }
+            Regex("^(open|start|ga naar|launch|open de app|open app)\\s+(.{2,40})$").matches(t) -> { {
+                val name = Regex("^(open de app|open app|open|start|ga naar|launch)\\s+(.+)$").find(t)!!.groupValues[2]
+                val pm = packageManager
+                val apps = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                val hit = apps.firstOrNull { it.loadLabel(pm).toString().equals(name, true) }
+                if (hit == null) "" else { pm.getLaunchIntentForPackage(hit.activityInfo.packageName)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }; "Opened ${hit.loadLabel(pm)}" }
+            } }
+            else -> null
+        }
+        if (act == null) return false
+        val r = try { act() } catch (e: Exception) { "" }
+        if (r.isEmpty()) return false
+        Bus.log("⚡ $r (no AI needed)"); showResult(r); return true
     }
 
     private fun friendly(name: String, i: JSONObject, dsc: String): String = when (name) {
@@ -321,6 +347,7 @@ class AgentService : AccessibilityService() {
         if (cont && turns.isNotEmpty()) { val ob = "The user sent a follow-up (see Task).\n" + observe() + planText(); turns.last().obs = JSONArray().put(text(ob)); turns.last().observation = ob }
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false; var evWarned = false
         var model = cfg.model
+        val smartPlan = getSharedPreferences("p", MODE_PRIVATE).getBoolean("smartplan", true)
         val tools = tools()
         val hearth = cfg.hearth
         for (step in 1..60) {
@@ -328,7 +355,7 @@ class AgentService : AccessibilityService() {
             sessionTask = taskText
             while (turns.size > 40) turns.removeAt(0)
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty()) "" else "Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() else "")
+            val firstText = (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty()) "" else "Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() + "\n(First call the plan tool.)" else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
@@ -347,12 +374,17 @@ class AgentService : AccessibilityService() {
                 }
                 msgs.put(JSONObject().put("role", "user").put("content", res))
             }
-            val body = JSONObject().put("model", model).put("max_tokens", 1024).put("messages", msgs)
-            if (!hearth) body.put("tool_choice", if (step == 1 && turns.isEmpty()) JSONObject().put("type", "tool").put("name", "plan") else JSONObject().put("type", "any"))
+            val planCall = step == 1 && turns.isEmpty()
+            val callModel = if (!hearth && planCall && smartPlan && model.contains("haiku")) "claude-sonnet-5-5" else model   // a stronger model writes the plan; the cheap one executes it
+            val body = JSONObject().put("model", callModel).put("max_tokens", 800).put("messages", msgs)
+            // forcing a tool is only supported on the Haiku models; Sonnet/Opus 5.5 reject it (they follow the instructions instead)
+            if (!hearth && callModel.contains("haiku")) body.put("tool_choice", if (planCall) JSONObject().put("type", "tool").put("name", "plan") else JSONObject().put("type", "any"))
+            if (!hearth && callModel.contains("sonnet")) body.put("output_config", JSONObject().put("effort", "medium"))
             if (hearth) body.put("system", SYSTEM_TEXT).put("stream", false)
             else body.put("system", JSONArray().put(JSONObject().put("type", "text").put("text", SYSTEM).put("cache_control", JSONObject().put("type", "ephemeral")))).put("tools", tools)
             statusLine = "Thinking…"; refreshOverlay()
             val resp = Api.post(cfg.url, cfg.key, body)
+            Usage.record(this, callModel, resp, hearth)
             val content = resp.getJSONArray("content")
             val raw = (0 until content.length()).map { content.getJSONObject(it) }.filter { it.getString("type") == "text" }.joinToString("\n") { it.getString("text") }
             val calls = ArrayList<Triple<String, String, JSONObject>>()   // id, name, input
@@ -459,8 +491,8 @@ class AgentService : AccessibilityService() {
         a.put(tool("screenshot", "Attach a screenshot to the next observation. Costly: use only when the element list is empty or insufficient (camera views, images, games).", JSONObject()))
         val item = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string")).put("status", JSONObject().put("type", "string").put("enum", JSONArray(listOf("pending", "doing", "done", "skipped"))))).put("required", JSONArray(listOf("text", "status")))
         a.put(tool("plan", "Set your GOAL and to-do list. Call it FIRST in every task (it is forced on your first turn), and again whenever a step is done/started or the user changes the task. Always send everything.", JSONObject().put("goal", p("string", "the concrete end result the user wants, one sentence")).put("done_when", p("string", "what exactly must be visible/true on screen to prove the goal is reached")).put("items", JSONObject().put("type", "array").put("items", item)), listOf("goal", "done_when", "items")))
-        val hi = JSONObject().put("type", "object").put("properties", JSONObject().put("id", p("integer", "element id from the latest list")).put("x", p("integer")).put("y", p("integer")).put("w", p("integer")).put("h", p("integer")).put("label", p("string", "short note shown next to it")))
-        a.put(tool("highlight", "Show the user something on their screen: dims the screen and outlines elements with an optional label. Use it for 'show me / where is / which one / point out / find' requests or to point at an answer (price, button, message). Items are element ids from the latest list or raw pixel rectangles x,y,w,h. Afterwards finish with a short spoken explanation.", JSONObject().put("items", JSONObject().put("type", "array").put("items", hi)).put("seconds", p("integer", "how long to keep it, default 10")), listOf("items")))
+        val hi = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string", "visible text of the element, located live")).put("substring", p("string", "exact piece of the text to box only that part")).put("id", p("integer", "element id from the latest list")).put("x", p("integer")).put("y", p("integer")).put("w", p("integer")).put("h", p("integer")).put("label", p("string", "short note shown next to it")))
+        a.put(tool("highlight", "Show the user something on their screen: dims the screen and outlines exactly the thing, with an optional label. Use it for 'show me / where is / which one / point out / find' requests or to point at an answer (price, button, message). Each item: text = the visible text of the element (best: located live, always accurate), plus substring = an exact piece of a long text to box only that part (e.g. a price or a name inside a paragraph); or id from the latest list; or raw pixels x,y,w,h. A screenshot is attached afterwards: check the outline, redo if off. Then finish with a short spoken explanation.", JSONObject().put("items", JSONObject().put("type", "array").put("items", hi)).put("seconds", p("integer", "how long to keep it, default 10")), listOf("items")))
         a.put(tool("find_tap", "Find an element by its visible text/description (fuzzy, ignores case/accents), scrolling the page if needed, and tap it. Much faster than scrolling and tapping by hand: use for known buttons, contacts, list items, settings.", JSONObject().put("text", p("string")), listOf("text")))
         a.put(tool("open_url", "Open a link or intent directly: https://..., tel:+32..., sms:+32...?body=..., mailto:, geo:0,0?q=place. Opens the dialer (not an auto-call) for tel:.", JSONObject().put("url", p("string")), listOf("url")))
         a.put(tool("volume", "Set volume 0-100 for stream 'media' (default) or 'ring'.", JSONObject().put("level", p("integer")).put("stream", p("string")), listOf("level")))
@@ -670,10 +702,11 @@ class AgentService : AccessibilityService() {
             if ((n.isClickable || n.isEditable || n.isScrollable || n.isCheckable || tx.isNotEmpty() || ds.isNotEmpty()) && nodes.size < 160) {
                 val r = Rect(); n.getBoundsInScreen(r)
                 if (!r.isEmpty) {
-                    sb.append("[${nodes.size}] ${n.className?.toString()?.substringAfterLast('.') ?: ""}")
+                    val cn = n.className?.toString()?.substringAfterLast('.') ?: ""
+                    sb.append("[${nodes.size}]${if (cn in plainClasses) "" else " $cn"}")
                     if (tx.isNotEmpty()) sb.append(" \"$tx\"")
                     if (ds.isNotEmpty() && ds != tx) sb.append(" desc=\"$ds\"")
-                    if (rid.isNotEmpty()) sb.append(" #$rid")
+                    if (rid.isNotEmpty() && tx.isEmpty() && ds.isEmpty()) sb.append(" #$rid")
                     sb.append(' ')
                     if (n.isClickable) sb.append('c'); if (n.isEditable) sb.append('e'); if (n.isScrollable) sb.append('s')
                     if (n.isChecked) sb.append('k'); if (n.isFocused) sb.append('f')
@@ -727,18 +760,69 @@ class AgentService : AccessibilityService() {
         return "error: \"$q\" not found on screen or after scrolling (try other wording, a screenshot, or ask_user)"
     }
 
+    /** Live lookup of the best element for a text, in every app window. */
+    private fun locate(q: String): AccessibilityNodeInfo? {
+        val nq = norm(q); if (nq.length < 2) return null
+        var best: AccessibilityNodeInfo? = null; var bs = 0; var bl = 0
+        fun walk(n: AccessibilityNodeInfo) {
+            if (!n.isVisibleToUser) return
+            val t = norm(((n.text ?: n.contentDescription) ?: "").toString())
+            if (t.isNotEmpty()) {
+                val sc = if (t == nq) 3 else if (t.startsWith(nq)) 2 else if (t.contains(nq)) 1 else 0
+                if (sc > bs || (sc == bs && sc > 0 && t.length < bl)) { best = n; bs = sc; bl = t.length }
+            }
+            for (k in 0 until n.childCount) n.getChild(k)?.let { walk(it) }
+        }
+        for (win in windows) if (win.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) win.root?.let { if (it.packageName != packageName) walk(it) }
+        return best
+    }
+
+    /** Exact on-screen boxes of a substring inside a text node (one box per line of text). */
+    @Suppress("DEPRECATION")
+    private fun charBoxes(n: AccessibilityNodeInfo, sub: String): List<RectF> {
+        val full = (n.text ?: return emptyList()).toString()
+        val at = full.indexOf(sub, ignoreCase = true).takeIf { it >= 0 } ?: return emptyList()
+        val args = Bundle().apply {
+            putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, at)
+            putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, sub.length.coerceAtMost(200))
+        }
+        if (!n.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)) return emptyList()
+        val arr = n.extras.getParcelableArray(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY) ?: return emptyList()
+        val lines = ArrayList<RectF>()
+        for (o in arr) {
+            val r = o as? RectF ?: continue
+            if (r.isEmpty) continue
+            val cur = lines.lastOrNull()
+            if (cur != null && kotlin.math.abs(r.centerY() - cur.centerY()) < cur.height() * 0.6f) cur.union(r) else lines.add(RectF(r))
+        }
+        return lines
+    }
+
     private fun highlight(i: JSONObject): String {
         val arr = i.optJSONArray("items") ?: return "error: items missing"
-        val list = ArrayList<Annotations.Item>()
+        val m = resources.displayMetrics; val screen = RectF(0f, 0f, m.widthPixels.toFloat(), m.heightPixels.toFloat())
+        val list = ArrayList<Annotations.Item>(); val notes = ArrayList<String>()
         for (k in 0 until arr.length()) {
             val o = arr.optJSONObject(k) ?: continue
-            val r = Rect()
-            if (o.has("id")) nodes.getOrNull(o.optInt("id"))?.getBoundsInScreen(r) else if (o.has("x")) r.set(o.optInt("x"), o.optInt("y"), o.optInt("x") + o.optInt("w", 200), o.optInt("y") + o.optInt("h", 120))
-            if (!r.isEmpty) list.add(Annotations.Item(RectF(r), o.optString("label")))
+            val label = o.optString("label")
+            val sub = o.optString("substring")
+            var node: AccessibilityNodeInfo? = null
+            if (o.has("text") && o.optString("text").isNotBlank()) node = locate(o.optString("text"))
+            if (node == null && o.has("id")) node = nodes.getOrNull(o.optInt("id"))
+            val boxes = ArrayList<RectF>()
+            if (node != null) {
+                node.refresh()   // positions as they are NOW, not when the list was made
+                if (sub.isNotBlank()) boxes.addAll(charBoxes(node, sub))
+                if (boxes.isEmpty()) { val r = Rect(); node.getBoundsInScreen(r); if (!r.isEmpty) boxes.add(RectF(r)) }
+            } else if (o.has("x")) {
+                boxes.add(RectF(o.optInt("x").toFloat(), o.optInt("y").toFloat(), (o.optInt("x") + o.optInt("w", 200)).toFloat(), (o.optInt("y") + o.optInt("h", 120)).toFloat()))
+            } else notes.add("not found: ${o.optString("text").ifEmpty { "id " + o.optInt("id", -1) }}")
+            boxes.forEachIndexed { j, b -> if (b.intersect(screen) && b.width() > 4 && b.height() > 4) list.add(Annotations.Item(b, if (j == 0) label else "")) }
         }
-        if (list.isEmpty()) return "error: nothing to highlight (bad ids?)"
+        if (list.isEmpty()) return "error: nothing to highlight (${notes.joinToString("; ")}). Use text:\"visible text\" or fresh ids"
         main.post { (ann ?: Annotations(this).also { ann = it }).show(list, i.optInt("seconds", 10)) }
-        return "highlighted ${list.size} item(s)"
+        if (!wantImageLock) wantImage = true   // look at the result: the next observation carries a screenshot to verify the outline
+        return "highlighted ${list.size} box(es)" + if (notes.isEmpty()) "" else "; " + notes.joinToString("; ") + ". Check the screenshot: if an outline is not exactly on the right thing, call highlight again with text/substring."
     }
 
     private fun spoken(m: String): String { val f = m.trim().split(Regex("(?<=[.!?])\\s+")).first(); return if (f.length <= 170) f else f.take(170) }

@@ -50,6 +50,10 @@ class MainActivity : Activity() {
     private lateinit var planCard: LinearLayout
     private lateinit var planText: TextView
     private lateinit var names: EditText
+    private lateinit var balance: EditText
+    private lateinit var usageText: TextView
+    private lateinit var usageCard: LinearLayout
+    private lateinit var smartBtn: Button
     private lateinit var langBtns: List<Pair<String, Button>>
     private lateinit var logCard: LinearLayout
     private lateinit var log: TextView
@@ -161,6 +165,11 @@ class MainActivity : Activity() {
         )
         root.addView(planCard)
 
+        // usage card
+        usageText = tv("", 14f, fg)
+        usageCard = cardView(tv("Usage", 17f, fg, true), usageText.apply { layoutParams = lp(top = 6) })
+        root.addView(usageCard)
+
         // settings card
         segClaude = button("Claude API") { setProvider(false) }.apply { layoutParams = lp(0, -2, 0, 1f) }
         segHearth = button("Hearth") { setProvider(true) }.apply { layoutParams = lp(0, -2, 0, 1f) }
@@ -177,10 +186,26 @@ class MainActivity : Activity() {
             langBtns.forEachIndexed { i, (_, b) -> if (i > 0) addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(b) }
         }
         names = input("Names & words you use, comma separated (friends, places…)").apply { layoutParams = lp(top = 6); setText(p.getString("names", "")) }
+        balance = input("Credit balance in $ (optional)").apply { layoutParams = lp(top = 6); inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            Usage.left(this@MainActivity)?.let { setText(String.format(java.util.Locale.US, "%.2f", it)) } }
+        smartBtn = button("") { p.edit().putBoolean("smartplan", !p.getBoolean("smartplan", true)).apply(); render() }.apply { layoutParams = lp(top = 6) }
+        val modelChips = LinearLayout(this).apply {
+            layoutParams = lp(top = 6)
+            listOf("claude-haiku-5-5" to "Haiku 5.5 · fast", "claude-sonnet-5-5" to "Sonnet 5.5 · smart", "claude-opus-5-5" to "Opus 5.5 · best").forEach { (id, n) ->
+                addView(tv(n, 11f, accent).apply {
+                    background = bgOf(0x00000000, 20, accent); setPadding(dp(10), dp(5), dp(10), dp(5))
+                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) }
+                    setOnClickListener { if (!hearth) model.setText(id) }
+                })
+            }
+        }
         settingsBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; layoutParams = lp(top = 12)
             addView(LinearLayout(this@MainActivity).apply { addView(segClaude); addView(View(this@MainActivity).apply { layoutParams = lp(dp(8), 1) }); addView(segHearth) })
-            addView(url); addView(key); addView(model); addView(keyHint)
+            addView(url); addView(key); addView(model); addView(modelChips); addView(keyHint)
+            addView(smartBtn)
+            addView(tv("Credit balance", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(balance)
+            addView(tv("Anthropic doesn't let apps read your balance. Enter it once (console.anthropic.com → Billing) and the app subtracts what it spends.", 12f, sub).apply { layoutParams = lp(top = 4) })
             addView(tv("Voice language", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(langRow)
             addView(tv("Names it should recognise", 13f, fg, true).apply { layoutParams = lp(top = 14) }); addView(names)
             addView(tv("Helps speech recognition and matching with friends/contacts, e.g. Jan, Sanne, Wout.", 12f, sub).apply { layoutParams = lp(top = 4) })
@@ -222,6 +247,7 @@ class MainActivity : Activity() {
     private fun saveProvider() {
         p.edit().putBoolean("hearth", hearth).putString(if (hearth) "key_h" else "key", key.text.toString().trim())
             .putString(if (hearth) "model_h" else "model", model.text.toString().trim()).putString("url", url.text.toString().trim()).putString("names", names.text.toString().trim()).apply()
+        balance.text.toString().trim().toFloatOrNull()?.let { v -> if (kotlin.math.abs(v - (Usage.left(this) ?: -1f)) > 0.004f) Usage.setBalance(this, v) }
     }
 
     private fun setProvider(h: Boolean) {
@@ -276,6 +302,11 @@ class MainActivity : Activity() {
         key.hint = if (hearth) "Hearth API key" else "Claude API key (sk-ant-…)"
         keyHint.text = if (hearth) "Don't have a Claude key? Use your Hearth server: model haiku, sonnet or opus. Text-only, so no screenshots." else "Get a key at console.anthropic.com. Haiku is cheapest and fastest."
 
+        smartBtn.text = if (p.getBoolean("smartplan", true)) "✓ Smart planning: Sonnet plans, Haiku executes" else "Smart planning off (tap to turn on)"
+        val left = Usage.left(this)
+        usageText.text = (if (left != null) "Credits left ≈ ${Usage.money(left.toDouble())}\n" else "") +
+            (if (Usage.calls > 0) "Last task: ${Usage.taskLine(hearth)}\n" else "") +
+            if (hearth) "Using your Hearth plan (no API credits)" else "Today ≈ ${Usage.money(Usage.today(this).toDouble())} · Total ≈ ${Usage.money(Usage.total(this).toDouble())}"
         val t = Bus.text()
         logCard.visibility = if (t.isEmpty()) View.GONE else View.VISIBLE
         log.text = t
