@@ -104,6 +104,25 @@ class AgentService : AccessibilityService() {
 
     fun interrupt(t: String) { if (t.isNotBlank() && running) { extras.add(t.trim()); Bus.log("➕ ${t.trim()}") } }
 
+    /** Wake the screen and, if possible, get past the lock screen; ask the user to unlock when a PIN/pattern is needed. */
+    private fun ensureAwake(): Boolean {
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        val km = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        if (!pm.isInteractive) {
+            @Suppress("DEPRECATION") val wl = pm.newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "phoneassistant:wake")
+            wl.acquire(8000); Thread.sleep(900)
+        }
+        if (!km.isKeyguardLocked) return true
+        val m = resources.displayMetrics
+        swipe(m.widthPixels / 2, m.heightPixels * 9 / 10, m.widthPixels / 2, m.heightPixels * 3 / 10, 250); Thread.sleep(900)
+        if (!km.isKeyguardLocked) return true
+        statusLine = "Unlock your phone"; refreshOverlay(); speak("Ontgrendel je telefoon"); Bus.log("🔒 waiting for you to unlock the phone")
+        var waited = 0
+        while (km.isKeyguardLocked && waited < 45_000 && !stopFlag) { Thread.sleep(500); waited += 500 }
+        Thread.sleep(500)
+        return !km.isKeyguardLocked
+    }
+
     private fun planText(): String = (if (goal.isEmpty()) "" else "\n🎯 GOAL: $goal" + (if (doneWhen.isEmpty()) "" else "\n✔ DONE WHEN: $doneWhen")) + if (todos.isEmpty()) "" else "\nTo-do list:\n" + todos.mapIndexed { i, t -> "${i + 1}. [${t.status}] ${t.text}" }.joinToString("\n")
 
     private fun openTodos() = todos.filter { it.status == "pending" || it.status == "doing" }
@@ -336,6 +355,7 @@ class AgentService : AccessibilityService() {
         Bus.log("▶ $task")
         thread {
             runDid = ArrayList(); noted = false
+            if (!ensureAwake()) { Bus.log("■ Phone is locked"); running = false; Bus.listener?.invoke(); main.post { refreshOverlay() }; return@thread }
             try { loop(task, cfg, cont) } catch (e: Throwable) { Bus.log("Error: ${e.message ?: e.javaClass.simpleName}") }
             if (!noted) addNote(task, "(did not finish: stopped or failed)")
             Bus.log("💰 " + Usage.taskLine(cfg.hearth))
