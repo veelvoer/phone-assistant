@@ -869,7 +869,14 @@ class AgentService : AccessibilityService() {
             if (node != null) {
                 node.refresh()   // positions as they are NOW, not when the list was made
                 if (sub.isNotBlank()) boxes.addAll(charBoxes(node, sub))
-                if (boxes.isEmpty()) { val r = Rect(); node.getBoundsInScreen(r); if (!r.isEmpty) boxes.add(RectF(r)) }
+                if (boxes.isEmpty()) {
+                    // a text label inside a clickable row/card: outline the whole row (what the user would tap), unless it is huge
+                    var t: AccessibilityNodeInfo = node; var depth = 0
+                    while (!t.isClickable && depth < 4) { t = t.parent ?: break; depth++ }
+                    val r = Rect(); node.getBoundsInScreen(r)
+                    if (t.isClickable) { val rr = Rect(); t.getBoundsInScreen(rr); if (!rr.isEmpty && rr.width().toLong() * rr.height() < m.widthPixels.toLong() * m.heightPixels * 0.4) r.set(rr) }
+                    if (!r.isEmpty) boxes.add(RectF(r))
+                }
             } else if (o.has("x")) {
                 boxes.add(RectF(o.optInt("x").toFloat(), o.optInt("y").toFloat(), (o.optInt("x") + o.optInt("w", 200)).toFloat(), (o.optInt("y") + o.optInt("h", 120)).toFloat()))
             } else notes.add("not found: ${o.optString("text").ifEmpty { "id " + o.optInt("id", -1) }}")
