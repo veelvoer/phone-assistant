@@ -303,7 +303,7 @@ class AgentService : AccessibilityService() {
 
     // ---------- agent loop ----------
     class Cfg(val hearth: Boolean, val url: String, val key: String, val model: String)
-    private class Turn(val assistant: JSONArray, val ids: List<String>, val briefs: List<String>, var obs: JSONArray, val raw: String, var observation: String)
+    private class Turn(var assistant: JSONArray, val ids: List<String>, val briefs: List<String>, var obs: JSONArray, val raw: String, var observation: String)
     private var runDid = ArrayList<String>()
     private var noted = false
 
@@ -377,7 +377,7 @@ class AgentService : AccessibilityService() {
         var taskText = if (cont) sessionTask + "\nFOLLOW-UP from the user (after you finished; it may correct or extend what you did: use the earlier context, e.g. fix, undo or redo it): $task" else task
         if (cont && turns.isNotEmpty()) { val ob = "The user sent a follow-up (see Task).\n" + observe() + planText(); turns.last().obs = JSONArray().put(text(ob)); turns.last().observation = ob }
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false; var evWarned = false
-        var model = cfg.model
+        var model = cfg.model; var noThinking = false
         val smartPlan = getSharedPreferences("p", MODE_PRIVATE).getBoolean("smartplan", true)
         val tools = tools()
         val hearth = cfg.hearth
@@ -414,9 +414,15 @@ class AgentService : AccessibilityService() {
             if (hearth) body.put("system", SYSTEM_TEXT).put("stream", false)
             else body.put("system", JSONArray().put(JSONObject().put("type", "text").put("text", SYSTEM).put("cache_control", JSONObject().put("type", "ephemeral")))).put("tools", tools)
             statusLine = "Thinking…"; refreshOverlay()
-            val resp = Api.post(cfg.url, cfg.key, body)
+            if (noThinking && !hearth) body.put("thinking", JSONObject().put("type", if (callModel.contains("haiku")) "disabled" else "between_tools"))
+            val resp = try { Api.post(cfg.url, cfg.key, body) } catch (e: RuntimeException) {
+                if (!hearth && !noThinking && (e.message ?: "").contains("thinking")) {   // thinking-block replay problem: drop all of them and run without thinking
+                    noThinking = true; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("↻ retrying without thinking blocks"); continue
+                }
+                throw e
+            }
             Usage.record(this, callModel, resp, hearth)
-            val content = resp.getJSONArray("content")
+            val content = resp.getJSONArray("content").let { if (callModel != model) stripThinking(it) else it }
             val raw = (0 until content.length()).map { content.getJSONObject(it) }.filter { it.getString("type") == "text" }.joinToString("\n") { it.getString("text") }
             val calls = ArrayList<Triple<String, String, JSONObject>>()   // id, name, input
             if (hearth) {
@@ -466,7 +472,7 @@ class AgentService : AccessibilityService() {
             val h = scr.hashCode()
             var warn = ""
             if (h == lastHash) { same++; warn = "\n⚠ The screen did NOT change after your last action. Do not repeat it: pick a different element or approach." + if (same >= 2) " You are stuck: call ask_user now." else ""; if (!hearth) wantImage = true
-                if (same >= 2 && !hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; Bus.log("⬆ stuck: switching to a stronger model for this task") }
+                if (same >= 2 && !hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ stuck: switching to a stronger model for this task") }
             } else same = 0
             lastHash = h
             if (!hearth && nodes.size < 3) wantImage = true
@@ -493,6 +499,13 @@ class AgentService : AccessibilityService() {
             if (a >= 0 && b > a) JSONArray(s.substring(a, b + 1)).let { arr -> (0 until arr.length()).mapNotNull { arr.optJSONObject(it) } }
             else { val x = s.indexOf('{'); val y = s.lastIndexOf('}'); if (x >= 0 && y > x) listOf(JSONObject(s.substring(x, y + 1))) else emptyList() }
         } catch (e: Exception) { emptyList() }
+    }
+
+    /** Thinking blocks are bound to the model + conversation that wrote them; replaying them elsewhere is a 400. We never need them back. */
+    private fun stripThinking(a: JSONArray): JSONArray {
+        val out = JSONArray()
+        for (k in 0 until a.length()) { val b = a.optJSONObject(k) ?: continue; val t = b.optString("type"); if (t != "thinking" && t != "redacted_thinking") out.put(b) }
+        return out
     }
 
     private fun text(s: String) = JSONObject().put("type", "text").put("text", s)
@@ -899,6 +912,7 @@ private const val RULES = """How to work (follow strictly):
 0. GOAL FIRST. Your first action is always plan: goal = the concrete end result the user wants (one sentence), done_when = what exactly must be visible/true on screen to prove it, items = 2-8 steps. The goal and your list are shown to you every turn. Everything you do must serve the goal: use every tool and trick available (find_tap, open_url, search, scroll, back, ask_user, screenshot...) until the goal is reached. Never stop at a partial result, never say you cannot without trying at least three different approaches. Whenever a step is done, call plan again in the same turn as your next action. Every tool has a "why" field: use it for one short sentence on how the action serves the goal.
 1. Before EVERY action write 1-2 short sentences: GOAL (the end result you must reach), what you see now, whether your last action worked, and your next step. Never lose sight of the goal.
 2. After every action check the new screen: did it do what you intended? If not, try something different (other element, tap_xy, scroll, back, screenshot). Never repeat a failing action more than twice. Keep trying until the goal is reached; don't give up early.
+3a. Questions: answer exactly what was asked from the exact label/row on screen (e.g. "Android version" is not the same as the OS skin version). If the needed row is not visible, open the right sub-screen or scroll to it. Never answer from guesses or memory when the screen can tell you. Do not type calculations into a field unless it is a real input; tap the buttons like a person.
 3. Finish only when done_when is verified on the current screen: call finish with evidence = what you saw that proves it. For multi-part requests do every part. If the user asked to be SHOWN or told something (where is X, which one, what does it say, find me...), find it, call highlight on it (ids from the latest list), then finish with a short spoken answer. Do exactly what was asked, never ignore part of a request.
 4. Ask the user (ask_user) when the request is unclear or doesn't match what you see (e.g. contact not found, two matches, wrong app), when something unexpected blocks you (login, captcha, permission), or after two failed approaches. Ask short, concrete questions. Don't ask when the request is clear: just do it, without asking for confirmation.
 5. Be efficient: fewest steps. Use find_tap{text} when you know the label of what to press, even if it is off-screen or in a list. Prefer open_app over navigating. Prefer tap by id; ids change after every screen change, use only the latest list.

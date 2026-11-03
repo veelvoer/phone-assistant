@@ -20,7 +20,7 @@ object Api {
             val code = c.responseCode
             val text = (if (code in 200..299) c.inputStream else c.errorStream).bufferedReader().use { it.readText() }
             if (code in 200..299) return JSONObject(text)
-            last = "API $code: ${text.take(300)}"
+            last = "API $code: ${text.take(900)}"
             if (code != 429 && code != 529 && code < 500) throw RuntimeException(last)
             Thread.sleep(2000L * (attempt + 1))
         }
