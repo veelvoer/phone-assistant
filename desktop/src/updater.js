@@ -41,7 +41,7 @@ const wq = (s) => `"${String(s).replace(/"/g, '""')}"`;
 function linuxScripts({ kind, pid, newFile, target, installDir, extractedDir }) {
   const launchEnv = 'env -u ELECTRON_RUN_AS_NODE';
   if (kind === 'linux-appimage') return `while kill -0 ${pid} 2>/dev/null; do sleep 0.3; done; mv -f ${q(newFile)} ${q(target)} && chmod +x ${q(target)}; (${launchEnv} ${q(target)} --no-sandbox >/dev/null 2>&1 &)`;
-  return `while kill -0 ${pid} 2>/dev/null; do sleep 0.3; done; rm -rf ${q(installDir + '.old')}; mv ${q(installDir)} ${q(installDir + '.old')} && mv ${q(extractedDir)} ${q(installDir)} && rm -rf ${q(installDir + '.old')}; (${launchEnv} ${q(path.join(installDir, path.basename(target)))} --no-sandbox >/dev/null 2>&1 &)`;
+  return `while kill -0 ${pid} 2>/dev/null; do sleep 0.3; done; rm -rf ${q(installDir + '.old')}; mv ${q(installDir)} ${q(installDir + '.old')} && mv ${q(extractedDir)} ${q(installDir)} && rm -rf ${q(installDir + '.old')}; (${launchEnv} ${q(path.posix.join(installDir, path.posix.basename(target)))} --no-sandbox >/dev/null 2>&1 &)`;
 }
 
 function windowsCommand({ kind, newFile, target }) {
