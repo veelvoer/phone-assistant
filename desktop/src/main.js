@@ -211,19 +211,27 @@ function handleArgs(args) {
 }
 
 // ---------- updates from GitHub releases ----------
-const vnum = (v) => String(v).replace(/^\D+/, '').split('.').map((x) => parseInt(x, 10) || 0);
-const newer = (a, b) => { const x = vnum(a), y = vnum(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+const updater = require('./updater');
+let pendingRel = null, updating = false;
 async function checkUpdate(manual) {
   try {
     const r = await fetch('https://api.github.com/repos/veelvoer/phone-assistant/releases?per_page=30', { headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000) });
-    const list = await r.json(); const rel = list.find((x) => /^desktop-v/.test(x.tag_name) && !x.draft);
-    if (rel && newer(rel.tag_name, app.getVersion())) { send(mainWin, 'update', { version: rel.tag_name.replace(/^desktop-v/, ''), url: rel.html_url, notes: String(rel.body || '').slice(0, 400) }); return true; }
+    const rel = updater.pickRelease(await r.json());
+    if (rel && updater.newer(rel.tag_name, app.getVersion())) { pendingRel = rel; send(mainWin, 'update', { version: rel.tag_name.replace(/^desktop-v/, ''), url: rel.html_url, notes: String(rel.body || '').slice(0, 400), canInstall: !!updater.pickAsset(rel.assets, process.platform).asset && app.isPackaged }); return true; }
     if (manual) send(mainWin, 'toast', `You're up to date (v${app.getVersion()})`);
   } catch (e) { if (manual) send(mainWin, 'toast', 'Update check failed: ' + e.message); }
   return false;
 }
 ipcMain.handle('update:check', () => checkUpdate(true));
 ipcMain.handle('update:open', (_e, url) => { if (/^https:\/\/github\.com\/veelvoer\//.test(url)) shell.openExternal(url); return true; });
+ipcMain.handle('update:install', async () => {
+  if (!pendingRel || updating) return false; updating = true;
+  try {
+    await updater.install({ rel: pendingRel, app, onState: (s) => send(mainWin, 'update:state', s) });
+    send(mainWin, 'update:state', { phase: 'restarting' }); app.isQuitting = true; setTimeout(() => app.quit(), 600);
+  } catch (e) { updating = false; send(mainWin, 'update:state', { phase: 'error', error: e.message }); }
+  return true;
+});
 
 // ---------- start ----------
 app.whenReady().then(async () => {
@@ -255,7 +263,7 @@ app.whenReady().then(async () => {
   try { tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'tray.png')).resize({ width: 22, height: 22 })); tray.setToolTip('Assistant'); tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Talk', click: () => toggle() }, { label: 'Open', click: () => { mainWin.show(); } }, { type: 'separator' }, { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } }])); tray.on('click', () => mainWin.show()); } catch { tray = null; }
   for (const p of platform.problems()) log('⚠ ' + p);
   if (isHypr() && config.get('hotkeyBound')) bindHypr(config.get('hotkey'));
-  handleArgs(ARGS); setTimeout(() => checkUpdate(false), 4000);
+  handleArgs(ARGS); setTimeout(() => checkUpdate(false), 4000); setInterval(() => checkUpdate(false), 6 * 3600 * 1000);
   if (flag('--selftest')) setTimeout(() => selftest(), 1500);
 });
 

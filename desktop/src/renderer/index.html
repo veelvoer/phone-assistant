@@ -2,7 +2,7 @@
 <header><div><h1>Assistant</h1><div class="status"><i id="dot"></i><span id="statusText">Ready</span></div></div><nav><button class="tab on" data-tab="home">Home</button><button class="tab" data-tab="settings">Settings</button></nav></header>
 <main>
 <section id="home" class="page on">
-  <div id="update" class="card upd" hidden><b id="updT"></b><p id="updN" class="hint"></p><button id="updB" class="filled">Download</button></div><div id="warnings"></div>
+  <div id="update" class="card upd" hidden><b id="updT"></b><p id="updN" class="hint"></p><div id="updBar" class="bar" hidden><i></i></div><div class="row"><button id="updB" class="filled">Update now</button><button id="updPage" class="tonal">Release page</button></div></div><div id="warnings"></div>
   <div class="card ask"><textarea id="task" rows="3" placeholder="What should I do on your computer?"></textarea>
     <div class="chips"><span class="chip">Open Firefox and search lofi on YouTube</span><span class="chip">How much disk space is free?</span><span class="chip">Show me where the volume setting is</span></div>
     <div class="row"><button id="mic" class="tonal round" title="Talk (continuous)"></button><button id="run" class="filled grow"></button></div>

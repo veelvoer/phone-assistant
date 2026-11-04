@@ -53,6 +53,20 @@ for (const f of fs.readdirSync(path.join(__dirname, '../src/renderer')).filter((
   n = 5; script.push((b) => { const t0 = b.messages[0].content[0].text; assert.ok(t0.includes('Lessons from earlier corrections') && t0.includes('Jan Peeters')); assert.ok(t0.includes('CORRECTING your previous work')); return { content: [{ type: 'tool_use', id: 'v1', name: 'plan', input: { goal: 'g', done_when: 'd', items: [] } }, { type: 'tool_use', id: 'v2', name: 'finish', input: { message: 'ok', evidence: 'e' } }] }; });
   await a.run('nee, ik bedoelde Jan Claes');
   assert.ok(a.forget('Jan Peeters').includes('forgot') && cfg.lessons().length === 0);
+  // updater helpers
+  const U = require('../src/updater');
+  const rels = [{ tag_name: 'v1.19.0' }, { tag_name: 'desktop-v1.3.0', assets: [] }, { tag_name: 'desktop-v1.10.0', assets: [] }, { tag_name: 'desktop-v1.9.9', draft: true }];
+  assert.strictEqual(U.pickRelease(rels).tag_name, 'desktop-v1.10.0'); assert.ok(U.newer('desktop-v1.10.0', '1.9.0') && !U.newer('desktop-v1.3.0', '1.3.0'));
+  const assets = [{ name: 'Assistant-1.4.0.AppImage' }, { name: 'Assistant.1.4.0.exe' }, { name: 'Assistant.Setup.1.4.0.exe' }, { name: 'x.tar.gz' }];
+  assert.strictEqual(U.pickAsset(assets, 'win32', {}).asset.name, 'Assistant.Setup.1.4.0.exe'); assert.strictEqual(U.pickAsset(assets, 'win32', { PORTABLE_EXECUTABLE_FILE: 'C:\\a.exe' }).asset.name, 'Assistant.1.4.0.exe');
+  assert.deepStrictEqual([U.pickAsset(assets, 'linux', {}).kind, U.pickAsset(assets, 'linux', { APPIMAGE: '/x' }).kind], ['linux-dir', 'linux-appimage']);
+  const script1 = U.linuxScripts({ kind: 'linux-dir', pid: 42, installDir: "/home/u/Applications/Assistant", extractedDir: '/tmp/u/squashfs-root', target: '/home/u/Applications/Assistant/phone-assistant-desktop' });
+  assert.ok(script1.includes('kill -0 42') && script1.includes("mv '/tmp/u/squashfs-root' '/home/u/Applications/Assistant'") && script1.includes("-u ELECTRON_RUN_AS_NODE '/home/u/Applications/Assistant/phone-assistant-desktop'"));
+  assert.ok(U.linuxScripts({ kind: 'linux-appimage', pid: 1, newFile: "/a/it's.new", target: '/a/A.AppImage' }).includes("'/a/it'\\''s.new'"));
+  // download with progress against a local server
+  const http = require('http'); const payload = Buffer.alloc(300000, 7); const srv = http.createServer((q, r) => { r.writeHead(200, { 'content-length': payload.length }); r.end(payload); }); await new Promise((r) => srv.listen(0, r));
+  const dest = path.join(os.tmpdir(), 'dl-test-' + process.pid); const seen = []; await U.download(`http://127.0.0.1:${srv.address().port}/f`, dest, (p) => seen.push(p)); srv.close();
+  assert.strictEqual(fs.statSync(dest).size, payload.length); assert.ok(seen.length && seen[seen.length - 1] === 1); fs.unlinkSync(dest);
   const { explain } = require('../src/errors');
   assert.ok(/API-sleutel/.test(explain('API 401: invalid x-api-key', true))); assert.ok(/credit/.test(explain('API 400: Your credit balance is too low', false))); assert.ok(/internet/.test(explain('NETWORK: fetch failed', true)));
   // network failure is retried and then reported, not a crash

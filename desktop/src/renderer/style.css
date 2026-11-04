@@ -15,3 +15,4 @@ label { display: block; margin-top: 14px; font-weight: 600; font-size: 14px; } i
 #warnings .warn { background: var(--container); color: var(--on-container); border-radius: 18px; padding: 12px 16px; margin-top: 12px; font-size: 13px; } #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--container); color: var(--on-container); padding: 10px 18px; border-radius: 18px; display: none; }
 .upd { background: var(--container); color: var(--on-container); } .upd .hint { color: var(--on-container); opacity: .8; }
 .filled, .round { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.bar { height: 4px; border-radius: 2px; background: var(--outline); margin: 8px 0 12px; overflow: hidden; } .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
