@@ -1,34 +1,19 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Assistant</title><link rel="stylesheet" href="style.css"></head><body>
-<header><div><h1>Assistant</h1><div class="status"><i id="dot"></i><span id="statusText">Ready</span></div></div><nav><button class="tab on" data-tab="home">Home</button><button class="tab" data-tab="settings">Settings</button></nav></header>
-<main>
-<section id="home" class="page on">
-  <div id="update" class="card upd" hidden><b id="updT"></b><p id="updN" class="hint"></p><div id="updBar" class="bar" hidden><i></i></div><div class="row"><button id="updB" class="filled">Update now</button><button id="updPage" class="tonal">Release page</button></div></div><div id="warnings"></div>
-  <div class="card ask"><textarea id="task" rows="3" placeholder="What should I do on your computer?"></textarea>
-    <div class="chips"><span class="chip">Open Firefox and search lofi on YouTube</span><span class="chip">How much disk space is free?</span><span class="chip">Show me where the volume setting is</span></div>
-    <div class="row"><button id="mic" class="tonal round" title="Talk (continuous)"></button><button id="run" class="filled grow"></button></div>
-    <p class="hint">Shortcut: <b id="hk"></b> &nbsp;·&nbsp; or <code>assistant --toggle</code> from a compositor key bind</p></div>
-  <div class="stats"><div><span>Today</span><b id="sToday">–</b></div><div><span>Credits left</span><b id="sLeft">set in Settings</b></div><div><span>Last task</span><b id="sLast">–</b></div></div>
-  <div class="card" id="planCard" hidden><h3>Plan</h3><div id="plan"></div><div class="row"><input id="planIn" placeholder="Change the plan… (or just say it)"><button id="planSend" class="tonal">Send</button></div></div>
-  <div class="card"><div class="row"><h3 class="grow">Activity</h3><button id="clear" class="link">Clear</button></div><pre id="log"></pre></div>
-</section>
-<section id="settings" class="page">
-  <h2>AI</h2><div class="card">
-    <div class="seg" id="provider"><button data-v="claude">Claude API</button><button data-v="hearth">Hearth</button></div>
-    <div id="claudeBox"><label>API key<input id="apiKey" type="password" placeholder="sk-ant-…"></label><label>Model<input id="model"></label><div class="chips" id="modelChips"><span class="chip" data-m="claude-haiku-5-5">Haiku · fast</span><span class="chip" data-m="claude-sonnet-5-5">Sonnet · smart</span><span class="chip" data-m="claude-opus-5-5">Opus · best</span></div></div>
-    <div id="hearthBox" hidden><label>Hearth server URL<input id="hearthUrl" placeholder="https://…"></label><label>Hearth API key<input id="hearthKey" type="password"></label><label>Model<input id="hearthModel"></label><p class="hint">Hearth is text-only here: no screenshots, so the assistant works through shell commands, files and keyboard shortcuts.</p></div>
-    <div class="sw"><div><b>Smart planning</b><small>A stronger model (Sonnet) writes the plan, the cheap one carries it out</small></div><input type="checkbox" id="smartPlan"></div>
-    <div class="sw"><div><b>Ask before destructive commands</b><small>rm -r, sudo, uninstall, kill…</small></div><input type="checkbox" id="confirmDestructive"></div>
-    <label>Max cost per task ($)<input id="costCap" type="number" step="0.05" min="0.05"></label></div>
-  <h2>Voice</h2><div class="card">
-    <div class="seg" id="lang"><button data-v="nl">Nederlands</button><button data-v="en">English</button><button data-v="auto">Auto</button></div>
-    <div class="seg" id="whisper"><button data-v="base">Speech model: Base (fast)</button><button data-v="small">Small (accurate)</button></div><p class="hint" id="sttInfo">Speech recognition runs on this computer (Whisper). The model downloads once.</p>
-    <div class="sw"><div><b>Spoken answers</b><small id="ttsInfo"></small></div><input type="checkbox" id="speak"></div>
-    <div class="row"><button id="testVoice" class="tonal">Test voice</button><button id="warm" class="tonal">Download speech model now</button></div>
-    <label>Shortcut</label><div class="row"><input id="hotkey" class="grow" readonly><button id="hkRec" class="tonal">Press keys…</button></div><p class="hint" id="hkInfo"></p></div>
-  <h2>Memory</h2><div class="card"><label>About you — one short fact per line<textarea id="facts" rows="5" placeholder="I am Warre&#10;mom = Anna Peeters&#10;brother = Lars"></textarea></label><label>Lessons it learned from your corrections<textarea id="lessons" rows="3" placeholder="Nothing learned yet"></textarea></label><p class="hint">When you say "nee, ik bedoelde …" it saves a rule here so it does not repeat the mistake. Edit or delete lines freely.</p><label>Names for speech recognition<input id="names" placeholder="Jan, Sanne, Wout"></label></div>
-  <h2>Credits</h2><div class="card"><label>Credit balance ($)<input id="balance" type="number" step="0.01"></label><p class="hint">Anthropic doesn't let apps read your balance. Enter it once (console.anthropic.com → Billing) and the app subtracts what it spends.</p></div>
-  <h2>Look</h2><div class="card"><div class="sw"><div><b>Screen glow &amp; highlights</b><small>The full-screen overlay while it works</small></div><input type="checkbox" id="overlay"></div><label>Accent colour (empty = system)<input id="accent" placeholder="#7aa2f7"></label><p class="hint" id="themeInfo"></p></div>
-  <h2>System</h2><div class="card"><div class="row"><span class="grow hint" id="ver"></span><button id="checkUpd" class="tonal">Check for updates</button></div><p id="sysInfo" class="hint"></p><div id="hyprBox" hidden><p class="hint">Hyprland: bind a key to toggle the assistant (voice + prompt):</p><pre id="hyprSnippet"></pre><div class="row"><button id="hyprBind" class="tonal">Bind SUPER+A now</button><button id="copySnippet" class="tonal">Copy snippet</button></div></div></div>
-</section></main>
+<div id="app">
+  <aside id="side"><div class="brand"><img src="../../assets/icon-256.png" alt=""><div><b>Assistant</b><span id="statusLine"><i id="dot"></i><em id="statusText">Ready</em></span></div></div><nav id="nav"></nav><div class="sidefoot" id="ver"></div></aside>
+  <main id="content">
+    <section id="page-home" class="page on">
+      <div id="update" class="card upd" hidden><div class="row"><div class="grow"><b id="updT"></b><p id="updN" class="hint"></p></div><div class="row"><button id="updPage" class="tonal">Notes</button><button id="updB" class="filled">Update now</button></div></div><div id="updBar" class="bar" hidden><i></i></div></div>
+      <div id="warnings"></div>
+      <div class="card ask"><textarea id="task" rows="3" placeholder="What should I do on your computer?"></textarea>
+        <div class="chips"><span class="chip">Open Firefox and search lofi on YouTube</span><span class="chip">How much disk space is free?</span><span class="chip">Explain how DNS works with a drawing</span></div>
+        <div class="row"><button id="mic" class="tonal round" title="Talk"></button><button id="run" class="filled grow"></button></div>
+        <p class="hint center">Shortcut <b id="hk"></b> · <code>assistant --toggle</code></p></div>
+      <div class="stats"><div><span>Today</span><b id="sToday">–</b></div><div><span>Credits left</span><b id="sLeft">–</b></div><div><span>Last task</span><b id="sLast">–</b></div></div>
+      <div class="card" id="planCard" hidden><h3>Plan</h3><div id="plan"></div><div class="row"><input id="planIn" placeholder="Change the plan… (or just say it)"><button id="planSend" class="tonal">Send</button></div></div>
+      <div class="card"><div class="row"><h3 class="grow">Activity</h3><button id="clear" class="link">Clear</button></div><pre id="log"></pre></div>
+    </section>
+  </main>
+</div>
 <div id="toast"></div>
 <script src="common.js"></script><script src="app.js"></script></body></html>

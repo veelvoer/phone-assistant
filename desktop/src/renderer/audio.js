@@ -25,3 +25,13 @@ async function start() {
 }
 function stop() { active = false; try { if (proc) proc.disconnect(); if (src) src.disconnect(); if (stream) stream.getTracks().forEach((t) => t.stop()); if (ctx) ctx.close(); } catch { /* ignore */ } proc = src = stream = ctx = null; buf = []; pre = []; }
 window.api.on('audio:cmd', (m) => { if (m.cmd === 'start') start(); else if (m.cmd === 'stop') stop(); else if (m.cmd === 'mute') muted = !!m.on; });
+
+// short UI sounds (WebAudio, no files)
+let ac = null;
+function chime(kind) {
+  try {
+    ac = ac || new AudioContext(); const t0 = ac.currentTime; const seq = { start: [[660, 0], [880, 0.09]], done: [[880, 0], [1175, 0.1]], stop: [[880, 0], [587, 0.1]], error: [[330, 0], [247, 0.12]] }[kind] || [[660, 0]];
+    for (const [f, dt] of seq) { const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.value = f; g.gain.setValueAtTime(0.0001, t0 + dt); g.gain.exponentialRampToValueAtTime(0.18, t0 + dt + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.18); o.connect(g); g.connect(ac.destination); o.start(t0 + dt); o.stop(t0 + dt + 0.2); }
+  } catch { /* no audio */ }
+}
+window.api.on('audio:chime', chime);

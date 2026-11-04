@@ -67,10 +67,16 @@ for (const f of fs.readdirSync(path.join(__dirname, '../src/renderer')).filter((
   const http = require('http'); const payload = Buffer.alloc(300000, 7); const srv = http.createServer((q, r) => { r.writeHead(200, { 'content-length': payload.length }); r.end(payload); }); await new Promise((r) => srv.listen(0, r));
   const dest = path.join(os.tmpdir(), 'dl-test-' + process.pid); const seen = []; await U.download(`http://127.0.0.1:${srv.address().port}/f`, dest, (p) => seen.push(p)); srv.close();
   assert.strictEqual(fs.statSync(dest).size, payload.length); assert.ok(seen.length && seen[seen.length - 1] === 1); fs.unlinkSync(dest);
+  // draw tool + persona
+  let drawn = null; const dctx = { ...a.makeCtx(), config: cfg, emit: (e, d) => { if (e === 'draw') drawn = d; } }; const draw = require('../src/tools').buildTools(dctx).find((x) => x.name === 'draw');
+  assert.ok((await draw.run({ title: 'T', frames: [{ svg: '<svg viewBox="0 0 800 500"><script>x</script><rect width="9" height="9" onclick="e()"/></svg>', caption: 'c' }, { svg: 'not svg' }] })).includes('1 frame')); assert.ok(drawn.frames[0].svg.includes('<rect') && !/script|onclick/.test(drawn.frames[0].svg));
+  cfg.set({ assistantName: 'Nova', tone: 'playful', replyLength: 'normal' }); n = 6; script.push((b) => { const sys = b.system[0].text; assert.ok(sys.includes('Your name is Nova') && sys.includes('playful') && sys.includes('2-3 sentences')); return { content: [{ type: 'tool_use', id: 'w1', name: 'plan', input: { goal: 'g', done_when: 'd', items: [] } }, { type: 'tool_use', id: 'w2', name: 'finish', input: { message: 'ok', evidence: 'e' } }] }; }); await a.run('hallo');
+  cfg.set({ dailyLimit: 0.0001 }); const spokeDaily = []; const lim = new Agent({ config: cfg, platform, usage, fetchImpl, speak: (t) => spokeDaily.push(t) }); usage.record('claude-haiku-5-5', { input_tokens: 100000, output_tokens: 100000 }); assert.strictEqual(await lim.run('x'), false); assert.ok(/daglimiet/.test(spokeDaily[0])); cfg.set({ dailyLimit: 0 });
   const { explain } = require('../src/errors');
   assert.ok(/API-sleutel/.test(explain('API 401: invalid x-api-key', true))); assert.ok(/credit/.test(explain('API 400: Your credit balance is too low', false))); assert.ok(/internet/.test(explain('NETWORK: fetch failed', true)));
   // network failure is retried and then reported, not a crash
   let tries = 0; const flaky = new Agent({ config: cfg, platform, usage, fetchImpl: async () => { tries++; throw new Error('fetch failed'); }, speak: () => {} });
   const said = []; flaky.on('result', (m) => said.push(m)); const realSleep = global.setTimeout; await flaky.run('doe iets'); assert.strictEqual(tries, 3); assert.ok(/internet/.test(said[0] || ''), 'network error is explained: ' + said[0]);
   console.log('agent tests passed');
+  await require('./ui').run();
 })().catch((e) => { console.error('TEST FAILED', e); process.exit(1); });

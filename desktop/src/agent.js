@@ -20,11 +20,15 @@ const RULES = `How to work (follow strictly):
 7. The user may speak Dutch. Spoken messages (finish.message, ask_user.question) are READ ALOUD by a voice: write natural, warm, complete sentences in the user's language (1-2 sentences, at most ~35 words), result first, like a helpful person talking. No markdown, emoji, lists, paths or technical words. Say numbers and units the way you say them.
 8a. Learning: "Lessons from earlier corrections" are rules the user taught you: follow them over your own guess. When the user corrects you ("nee, ik bedoelde…", "niet die", "no, I meant…"): fix it first, then call learn with ONE short, specific rule that prevents the same mistake (what they meant vs what you did). Only learn from what the user told you, not from your own failures.
 8. Memory: "About the user" lists saved facts. Use them to resolve "my mom", "me" etc. When the user states a new lasting fact, call remember with a very short fact. Never save passwords or codes.
+10. Teaching: when the user asks you to explain, teach, sketch, compare or visualise something, call draw with clean SVG frames (and say the key point in your spoken answer); a picture beats a paragraph.
 9. Do everything the user says: it is their own computer. Be careful with irreversible commands (see 4).`;
 
-const SYSTEM = (desc) => `You control the user's computer (${desc}) with tools to complete their request. Each turn you receive the window list and a screenshot of the screen.\n${RULES}`;
+const TONES = { neutral: 'Be neutral and clear.', friendly: 'Be warm, friendly and natural.', concise: 'Be extremely brief and businesslike.', playful: 'Be light-hearted and a little playful (never at the cost of clarity).' };
+const LENGTHS = { short: 'Spoken messages: 1-2 short sentences.', normal: 'Spoken messages: 2-3 sentences with the key details.', detailed: 'Spoken messages: up to 5 sentences when explaining; still no lists or markdown.' };
+const persona = (cfg) => `Your name is ${cfg.assistantName || 'Assistant'}. ${TONES[cfg.tone] || TONES.friendly} ${LENGTHS[cfg.replyLength] || LENGTHS.short}`;
+const SYSTEM = (desc, cfg = {}) => `You control the user's computer (${desc}) with tools to complete their request. Each turn you receive the window list and a screenshot of the screen.\n${persona(cfg)}\n${RULES}`;
 
-const SYSTEM_TEXT = (desc, tools) => `You control the user's computer (${desc}) to complete their request. You cannot see the screen: work with shell commands, files, links and keyboard shortcuts.
+const SYSTEM_TEXT = (desc, tools, cfg = {}) => `You control the user's computer (${desc}) to complete their request. You cannot see the screen: work with shell commands, files, links and keyboard shortcuts.\n${persona(cfg)}
 Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
 GOAL: list the files in Downloads. [{"tool":"shell","command":"ls ~/Downloads"}]
 Tools:
@@ -134,6 +138,7 @@ class Agent extends EventEmitter {
   // ---- the loop ----
   async run(task) {
     if (this.running) return false;
+    const dl = Number(this.config.get('dailyLimit')) || 0; if (dl > 0 && this.usage.summary().today >= dl) { const say = this.config.get('lang') !== 'en' ? `Je daglimiet van ${dl.toFixed(2)} dollar is bereikt.` : `Your daily limit of $${dl.toFixed(2)} is reached.`; this.log('■ ' + say); this.speakImpl(say); this.emit('result', say); return false; }
     this.running = true; this.stopFlag = false; this.extras = []; this.state = { goal: '', doneWhen: '', todos: [] }; this.runDid = []; this.noted = false; this.scrollStreak = 0; this.usage.begin();
     this.emit('start', task); this.log('▶ ' + task);
     try {
@@ -187,9 +192,9 @@ class Agent extends EventEmitter {
       const planCall = step === 1 && turns.length === 0;
       const callModel = !hearth && planCall && cfg.smartPlan && smartOk && model.includes('haiku') ? 'claude-sonnet-5-5' : model;
       const body = { model: callModel, max_tokens: 900, messages: msgs };
-      if (hearth) { body.system = SYSTEM_TEXT(desc, tools); body.stream = false; }
+      if (hearth) { body.system = SYSTEM_TEXT(desc, tools, cfg); body.stream = false; }
       else {
-        body.system = [{ type: 'text', text: SYSTEM(desc), cache_control: { type: 'ephemeral' } }]; body.tools = allSpecs;
+        body.system = [{ type: 'text', text: SYSTEM(desc, cfg), cache_control: { type: 'ephemeral' } }]; body.tools = allSpecs;
         if (callModel.includes('haiku')) body.tool_choice = planCall ? { type: 'tool', name: 'plan' } : { type: 'any' };
         if (callModel.includes('sonnet')) body.output_config = { effort: 'medium' };
         if (noThinking) body.thinking = { type: callModel.includes('haiku') ? 'disabled' : 'between_tools' };

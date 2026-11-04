@@ -10,6 +10,10 @@ const DEFAULTS = {
   hotkey: 'Ctrl+Alt+Space', hotkeyBound: false, accent: '',
   balance: null, spentSince: 0, spentTotal: 0, spentToday: 0, day: '',
   costCap: 0.3, confirmDestructive: true, overlay: true,
+  assistantName: 'Assistant', tone: 'friendly', replyLength: 'short', sounds: true,
+  quietOn: false, quietFrom: '22:00', quietTo: '08:00', dailyLimit: 0,
+  // overlay look
+  glowOn: true, glowWidth: 2, glowIntensity: 80, glowSpeed: 2, cardPos: 'bottom', cardSize: 'normal', cardOpacity: 92, cardRadius: 28, showBars: true, showProgress: true, autoHide: 5,
 };
 
 class Config {

@@ -86,6 +86,12 @@ function buildTools(ctx) {
   });
   add('get_clipboard', 'Read the clipboard text.', {}, [], async () => cut(await ctx.platform.getClipboard(), 4000) || '(empty)');
   add('set_clipboard', 'Put text on the clipboard.', { text: P('string') }, ['text'], async (i) => { await ctx.platform.setClipboard(String(i.text)); return 'ok'; });
+  add('draw', 'Draw a clear visual for the user on a whiteboard window: diagrams, flows, maps, comparisons, step-by-step schemes. Give 1-6 frames (shown as slides with captions) of SVG (viewBox 0 0 800 500, no scripts, no images). Use dark strokes and fills on the light background, accent colour #4f6bed, readable text (font-size >= 20), generous spacing, arrows with marker-end, labels near shapes. Use it when the user asks to explain, teach, sketch or visualise something.',
+    { title: P('string'), frames: { type: 'array', items: { type: 'object', properties: { svg: P('string', 'complete <svg viewBox="0 0 800 500">…</svg>'), caption: P('string', 'one or two sentences explaining this frame') }, required: ['svg'] } } }, ['title', 'frames'], async (i) => {
+      const { sanitizeSvg } = require('./svg'); const frames = (Array.isArray(i.frames) ? i.frames : []).slice(0, 6).map((f) => ({ svg: sanitizeSvg(f.svg), caption: String(f.caption || '').slice(0, 300) })).filter((f) => f.svg);
+      if (!frames.length) return 'error: no valid SVG (it must start with <svg viewBox="0 0 800 500"> and use only shapes and text)';
+      ctx.emit('draw', { title: String(i.title || '').slice(0, 80), frames }); return `showing ${frames.length} frame(s) on the whiteboard`;
+    });
   add('highlight', 'Show the user something on their screen: dims the screen and outlines the given rectangles with an optional label. Use for "show me / where is / which one" requests. Coordinates are screenshot pixels. Afterwards finish with a short spoken explanation.',
     { items: { type: 'array', items: { type: 'object', properties: { x: P('integer'), y: P('integer'), w: P('integer'), h: P('integer'), label: P('string') }, required: ['x', 'y', 'w', 'h'] } }, seconds: P('integer', 'default 10') }, ['items'], async (i) => {
       const list = [];

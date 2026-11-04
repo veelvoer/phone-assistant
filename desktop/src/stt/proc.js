@@ -3,24 +3,25 @@
 const workerData = { cacheDir: process.env.ASSISTANT_STT_CACHE };
 const parentPort = { postMessage: (m) => process.send(m), on: (_e, f) => process.on('message', f) };
 let asr = null, loadedId = '';
-const MODELS = { base: 'onnx-community/whisper-base', small: 'onnx-community/whisper-small', tiny: 'onnx-community/whisper-tiny' };
+const MODELS = { low: 'onnx-community/whisper-base', base: 'onnx-community/whisper-base', medium: 'onnx-community/whisper-small', small: 'onnx-community/whisper-small', high: 'onnx-community/whisper-large-v3-turbo', tiny: 'onnx-community/whisper-tiny' };
+const DTYPE = { high: { encoder_model: 'q4', decoder_model_merged: 'q4' } };   // the big model is only practical quantised to 4 bit (~760 MB)
 
 const fs = require('fs'); const path = require('path');
 async function load(model, retry) {
   const id = MODELS[model] || MODELS.small;
   if (asr && loadedId === id) return;
-  try { await loadOnce(id); } catch (e) {
+  try { await loadOnce(id, model); } catch (e) {
     // an interrupted download leaves a broken file: delete the model folder and fetch it again once
     if (!retry && /protobuf|corrupt|invalid|parsing failed|unexpected end/i.test(String(e && e.message))) { try { fs.rmSync(path.join(workerData.cacheDir, id), { recursive: true, force: true }); } catch { /* ignore */ } asr = null; return load(model, true); }
     throw e;
   }
 }
 
-async function loadOnce(id) {
+async function loadOnce(id, model) {
   const tf = await import('@huggingface/transformers');
   tf.env.cacheDir = workerData.cacheDir; tf.env.allowLocalModels = true;
   const files = {};
-  asr = await tf.pipeline('automatic-speech-recognition', id, { dtype: 'q8', device: 'cpu', progress_callback: (p) => {
+  asr = await tf.pipeline('automatic-speech-recognition', id, { dtype: DTYPE[model] || 'q8', device: 'cpu', progress_callback: (p) => {
     if (p.status === 'progress' && p.total) { files[p.file] = p.loaded / p.total; const v = Object.values(files); parentPort.postMessage({ type: 'progress', value: v.reduce((a, b) => a + b, 0) / Math.max(1, v.length) }); }
   } });
   loadedId = id;

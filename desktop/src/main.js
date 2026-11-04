@@ -32,6 +32,7 @@ async function installHyprRules() {
   const common = 'float=true, pin=true, no_anim=true, no_shadow=true, border_size=0, rounding=0, no_blur=true';
   const lua = `
     hl.window_rule({ name = "assistant-card", match = { title = "^Assistant Card$" }, ${common} })
+    hl.window_rule({ name = "assistant-board", match = { title = "^Assistant Board$" }, float = true, center = true })
     hl.window_rule({ name = "assistant-fx", match = { title = "^Assistant FX$" }, ${common}, no_focus = true })
     return 1`;
   const r = await run('hyprctl', ['eval', lua]);
@@ -69,14 +70,20 @@ function createMain() {
 
 async function focusedMonitor() { try { const m = await platform.monitor(); return { x: m.x, y: m.y, w: Math.round(m.lw), h: Math.round(m.lh) }; } catch { const d = screen.getPrimaryDisplay(); return { x: d.bounds.x, y: d.bounds.y, w: d.bounds.width, h: d.bounds.height }; } }
 
+const CARD_W = { compact: 460, normal: 600, large: 760 };
+const cardGeo = (m, h) => { const w = CARD_W[config.get('cardSize')] || 600; return { width: w, height: h, x: m.x + Math.round((m.w - w) / 2), y: config.get('cardPos') === 'top' ? m.y + 36 : m.y + m.h - h - 36 }; };
+const overlayStyle = () => ({ glowOn: config.get('glowOn') !== false, glowWidth: +config.get('glowWidth') || 2, glowIntensity: config.get('glowIntensity') == null ? 80 : +config.get('glowIntensity'), glowSpeed: +config.get('glowSpeed') || 2, cardOpacity: +config.get('cardOpacity') || 92, cardRadius: +config.get('cardRadius') || 28, showBars: config.get('showBars') !== false, showProgress: config.get('showProgress') !== false, cardPos: config.get('cardPos') || 'bottom' });
+const holdMs = () => Math.max(2, Math.min(20, Number(config.get('autoHide')) || 5)) * 1000;
+const isQuiet = () => { if (!config.get('quietOn')) return false; const mm = (t) => { const [h, m] = String(t).split(':').map(Number); return (h || 0) * 60 + (m || 0); }; const now = new Date(); const cur = now.getHours() * 60 + now.getMinutes(), a = mm(config.get('quietFrom')), b = mm(config.get('quietTo')); return a <= b ? cur >= a && cur < b : cur >= a || cur < b; };
+const chime = (kind) => { if (config.get('sounds') && !isQuiet()) micCmd({ cmd: 'chime', kind }); };
 async function showCard(focus) {
-  const m = await focusedMonitor(); const w = 600, h = S.cardH || 190;
+  const m = await focusedMonitor(); const g0 = cardGeo(m, S.cardH || 190); const w = g0.width, h = g0.height;
   if (!win(cardWin)) {
-    cardWin = new BrowserWindow({ width: w, height: h, x: m.x + Math.round((m.w - w) / 2), y: m.y + m.h - h - 36, title: 'Assistant Card', frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false, focusable: true, backgroundColor: '#00000000', webPreferences: baseWebPrefs() });
+    cardWin = new BrowserWindow({ width: w, height: h, x: g0.x, y: g0.y, title: 'Assistant Card', frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false, focusable: true, backgroundColor: '#00000000', webPreferences: baseWebPrefs() });
     cardWin.setAlwaysOnTop(true, 'screen-saver');
     await cardWin.loadFile(path.join(__dirname, 'renderer', 'card.html'));
     cardWin.on('closed', () => { cardWin = null; S.cardVisible = false; });
-  } else cardWin.setBounds({ x: m.x + Math.round((m.w - w) / 2), y: m.y + m.h - cardWin.getBounds().height - 36, width: w, height: cardWin.getBounds().height });
+  } else cardWin.setBounds(cardGeo(m, cardWin.getBounds().height));
   if (focus) { cardWin.show(); cardWin.focus(); } else cardWin.showInactive();
   S.cardVisible = true; pushState();
 }
@@ -93,11 +100,21 @@ async function showFx() {
   fxWin.showInactive(); pushState();
 }
 
+let boardWin = null;
+async function showBoard(d) {
+  const m = await focusedMonitor(); const w = Math.min(980, m.w - 80), h = Math.min(700, m.h - 100);
+  if (!win(boardWin)) {
+    boardWin = new BrowserWindow({ width: w, height: h, x: m.x + Math.round((m.w - w) / 2), y: m.y + Math.round((m.h - h) / 2), title: 'Assistant Board', frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false, backgroundColor: '#00000000', webPreferences: baseWebPrefs() });
+    await boardWin.loadFile(path.join(__dirname, 'renderer', 'board.html')); boardWin.on('closed', () => { boardWin = null; });
+  }
+  boardWin.show(); boardWin.focus(); send(boardWin, 'board', d);
+}
+
 function hideOverlay() { if (win(cardWin)) cardWin.hide(); if (win(fxWin)) fxWin.hide(); S.cardVisible = false; }
 
 let audioReady = Promise.resolve();
 function createAudio() {
-  audioWin = new BrowserWindow({ show: false, width: 200, height: 100, webPreferences: baseWebPrefs() });
+  audioWin = new BrowserWindow({ show: false, width: 200, height: 100, webPreferences: { ...baseWebPrefs(), autoplayPolicy: 'no-user-gesture-required' } });
   audioReady = new Promise((res) => audioWin.webContents.once('did-finish-load', res));
   audioWin.loadFile(path.join(__dirname, 'renderer', 'audio.html'));
 }
@@ -109,7 +126,8 @@ function overlayState() {
   const prog = todos.length ? (todos.filter((t) => t.status === 'done').length + 0.3) / todos.length : 0;
   const fresh = Date.now() < S.resultUntil; const running = agent && agent.running;
   let o;
-  if (S.asking) o = { mode: 'asking', title: 'Question', text: S.asking, sub: S.partial || (S.voice ? 'Say your answer…' : 'Type your answer'), progress: 0 };
+  if (S.previewUntil > Date.now() && !running && !S.voice && !S.asking) o = { mode: 'working', title: 'Preview', text: 'This is how I look and sound', sub: '2/4 · Customize me', progress: 0.5 };
+  else if (S.asking) o = { mode: 'asking', title: 'Question', text: S.asking, sub: S.partial || (S.voice ? 'Say your answer…' : 'Type your answer'), progress: 0 };
   else if (running) o = { mode: 'working', title: S.voice ? 'Working · listening' : 'Working', text: S.status || 'Thinking…', sub: S.partial ? '🎤 ' + S.partial : sub, progress: prog };
   else if (S.voice) o = { mode: 'listening', title: fresh ? 'Done' : 'Listening', text: fresh ? S.result : S.sttReady || config.get('whisperModel') ? (S.partial || 'Say what I should do…') : '', sub: S.sttProgress >= 0 && S.sttProgress < 1 ? `Loading speech model… ${Math.round(S.sttProgress * 100)}%` : fresh ? 'Listening for your next command' : '', progress: 0 };
   else if (fresh) o = { mode: 'info', title: 'Done', text: S.result, sub: '', progress: 0 };
@@ -118,23 +136,23 @@ function overlayState() {
   return o;
 }
 let pushTimer = null;
-function pushState() { if (pushTimer) return; pushTimer = setTimeout(() => { pushTimer = null; const o = overlayState(); if (!o) { if (!S.keepCard) hideOverlay(); return; } o.level = S.micLevel; o.voice = S.voice; send(cardWin, 'state', o); send(fxWin, 'state', o); send(mainWin, 'status', { voice: S.voice, running: !!(agent && agent.running), text: o.text, mode: o.mode }); }, 30); }
+function pushState() { if (pushTimer) return; pushTimer = setTimeout(() => { pushTimer = null; const o = overlayState(); if (!o) { if (!S.keepCard) hideOverlay(); return; } o.level = S.micLevel; o.voice = S.voice; o.style = overlayStyle(); send(cardWin, 'state', o); send(fxWin, 'state', o); send(mainWin, 'status', { voice: S.voice, running: !!(agent && agent.running), text: o.text, mode: o.mode }); }, 30); }
 
 // ---------- voice ----------
 function micCmd(cmd) { audioReady.then(() => send(audioWin, 'audio:cmd', cmd)); }
 async function startVoice(temp) {
   if (S.voice) return;
   S.voice = true; S.tempVoice = !!temp; S.partial = '';
-  stt.start(); micCmd({ cmd: 'start' }); await showCard(false); await showFx(); pushState();
+  chime('start'); stt.start(); micCmd({ cmd: 'start' }); await showCard(false); await showFx(); pushState();
 }
 function endVoice(stopAgent) {
   if (!S.voice && !stopAgent) return;
-  S.voice = false; S.tempVoice = false; S.partial = ''; micCmd({ cmd: 'stop' }); tts.stop(); S.speaking = false;
+  if (S.voice) chime('stop'); S.voice = false; S.tempVoice = false; S.partial = ''; micCmd({ cmd: 'stop' }); tts.stop(); S.speaking = false;
   if (stopAgent && agent) agent.stop();
   pushState(); setTimeout(pushState, 600);
 }
 function speak(t) {
-  if (!config.get('speak') || !tts.available()) return;
+  if (!config.get('speak') || !tts.available() || isQuiet()) return;
   S.speaking = true; micCmd({ cmd: 'mute', on: true });
   tts.speak(t).finally(() => { S.speaking = false; micCmd({ cmd: 'mute', on: false }); });
 }
@@ -169,13 +187,14 @@ async function runTask(text) {
 
 // ---------- IPC ----------
 function registerIpc() {
-  ipcMain.handle('cfg:all', () => ({ cfg: config.all(), theme, dark: nativeTheme.shouldUseDarkColors, platform: platform.describe(), problems: platform.problems(), tts: tts.describe(), hypr: isHypr(), launch: launchCommand(), usage: usage.summary(), facts: config.facts() }));
+  ipcMain.handle('cfg:all', () => ({ version: app.getVersion(), cfg: config.all(), theme, dark: nativeTheme.shouldUseDarkColors, platform: platform.describe(), problems: platform.problems(), tts: tts.describe(), hypr: isHypr(), launch: launchCommand(), usage: usage.summary(), facts: config.facts() }));
   ipcMain.handle('cfg:set', async (_e, patch) => {
     config.set(patch);
     if ('accent' in patch) { theme = await detectAccent({ systemPreferences }, config.get('accent')); broadcast('theme', theme, nativeTheme.shouldUseDarkColors); }
     if ('hotkey' in patch) { registerHotkey(); if (isHypr() && patch.hotkey) { const r = await bindHypr(patch.hotkey); if (r !== 'ok') broadcast('toast', 'Could not bind in Hyprland: ' + r); } }
     if ('balance' in patch) usage.setBalance(patch.balance);
     if ('whisperModel' in patch || 'lang' in patch) { if (stt.worker) { stt.stop(); } }
+    if (['cardPos', 'cardSize', 'cardOpacity', 'cardRadius', 'showBars', 'showProgress', 'glowOn', 'glowWidth', 'glowIntensity', 'glowSpeed', 'overlay'].some((k) => k in patch)) { S.previewUntil = Date.now() + 4500; await showCard(false); if (config.get('overlay')) await showFx(); pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }
     broadcast('usage', usage.summary()); return true;
   });
   ipcMain.handle('ui:run', (_e, text) => { handleText(String(text), false); return true; });
@@ -191,7 +210,9 @@ function registerIpc() {
   ipcMain.on('audio:utterance', (_e, buf) => onUtterance(buf));
   ipcMain.on('audio:level', (_e, v) => { if (!S.loggedLevel && v >= 0) { S.loggedLevel = true; console.log('[assistant] mic level events flowing'); } S.micLevel = v; if (S.voice) send(cardWin, 'level', v); send(fxWin, 'level', v); });
   ipcMain.on('audio:error', (_e, m) => { log('Microphone: ' + m); S.partial = ''; broadcast('toast', 'Microphone: ' + m); });
-  ipcMain.on('card:height', async (_e, h) => { if (win(cardWin)) { const b = cardWin.getBounds(); const m = await focusedMonitor(); S.cardH = Math.round(h); cardWin.setBounds({ x: b.x, y: m.y + m.h - S.cardH - 36, width: b.width, height: S.cardH }); } });
+  ipcMain.on('card:height', async (_e, h) => { if (win(cardWin)) { const m = await focusedMonitor(); S.cardH = Math.round(h); cardWin.setBounds(cardGeo(m, S.cardH)); } });
+  ipcMain.on('board:close', () => { if (win(boardWin)) boardWin.close(); });
+  ipcMain.handle('ui:preview', () => { S.previewUntil = Date.now() + 4500; showCard(false).then(() => (config.get('overlay') ? showFx() : null)).then(() => { pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }); return true; });
   ipcMain.on('card:close', () => { S.cardVisible = false; endVoice(false); hideOverlay(); });
   ipcMain.on('win:main', () => { if (win(mainWin)) { mainWin.show(); mainWin.focus(); } });
 }
@@ -250,10 +271,11 @@ app.whenReady().then(async () => {
   agent.on('plan', () => { send(mainWin, 'plan', agent.state); pushState(); });
   agent.on('usage', (u) => broadcast('usage', u));
   agent.on('asking', async (q) => { S.asking = q; if (!S.cardVisible) await showCard(true); await showFx(); if (!S.voice) startVoice(true); pushState(); });
-  agent.on('result', (m) => { S.result = m; S.resultUntil = Date.now() + 5000; pushState(); setTimeout(pushState, 5200); });
+  agent.on('result', (m) => { S.result = m; S.resultUntil = Date.now() + holdMs(); pushState(); setTimeout(pushState, holdMs() + 200); chime(/^(Error|Gestopt|Stopped)/i.test(m) ? 'error' : 'done'); });
+  agent.on('draw', (d) => showBoard(d));
   agent.on('highlight', (d) => { const b = win(fxWin) ? fxWin.getBounds() : { x: 0, y: 0 }; send(fxWin, 'highlight', { seconds: d.seconds, items: d.items.map((i) => ({ ...i, x: i.x - b.x, y: i.y - b.y })) }); });
   agent.on('facts', () => send(mainWin, 'facts', config.facts()));
-  agent.on('end', () => { S.asking = ''; S.status = ''; send(mainWin, 'plan', agent.state); pushState(); setTimeout(pushState, 5200); if (!S.voice && !S.keepCard) setTimeout(() => { if (!agent.running && !S.voice) hideOverlay(); }, 5400); });
+  agent.on('end', () => { S.asking = ''; S.status = ''; send(mainWin, 'plan', agent.state); pushState(); setTimeout(pushState, holdMs() + 200); if (!S.voice && !S.keepCard) setTimeout(() => { if (!agent.running && !S.voice && !(S.previewUntil > Date.now())) hideOverlay(); }, holdMs() + 400); });
 
   theme = await detectAccent({ systemPreferences }, config.get('accent'));
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'media' || perm === 'audioCapture'));
