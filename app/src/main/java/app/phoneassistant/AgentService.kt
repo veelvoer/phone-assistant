@@ -298,7 +298,23 @@ class AgentService : AccessibilityService() {
     private fun forget(q: String): String {
         val n = norm(q); if (n.length < 2) return "error: say what to forget"
         val l = facts(); val keep = l.filterNot { norm(it).contains(n) }
-        saveFacts(keep); Bus.listener?.invoke(); return "forgot ${l.size - keep.size} fact(s)"
+        saveFacts(keep)
+        val ls = lessons(); val lk = ls.filterNot { norm(it).contains(n) }; if (lk.size != ls.size) saveLessons(lk)
+        Bus.listener?.invoke(); return "forgot ${l.size - keep.size + ls.size - lk.size} item(s)"
+    }
+
+    // ---- lessons: what the user corrected, so the same mistake is not made twice ----
+    private fun lessons(): List<String> = getSharedPreferences("p", MODE_PRIVATE).getString("lessons", "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
+    private fun saveLessons(l: List<String>) {
+        val x = l.map { it.take(160) }.toMutableList()
+        while (x.joinToString("\n").length > 1800 && x.isNotEmpty()) x.removeAt(0)   // oldest go first; it is sent with every task
+        getSharedPreferences("p", MODE_PRIVATE).edit().putString("lessons", x.joinToString("\n")).apply()
+    }
+    private fun learn(lesson: String): String {
+        val t = lesson.trim().trimEnd('.').take(160); if (t.length < 8) return "error: lesson too short"
+        val n = norm(t)
+        val l = lessons().filterNot { val o = norm(it); o == n || o.contains(n) || n.contains(o) }.toMutableList()   // a refined version replaces the old one
+        l.add(t); saveLessons(l); Bus.log("🎓 learned: $t"); Bus.listener?.invoke(); return "learned: $t"
     }
 
     private fun names(): List<String> = (namesRaw() + facts().flatMap { f -> Regex("\\p{Lu}[\\p{L}'-]{2,}").findAll(f).map { it.value }.toList() }).distinct().take(60)
@@ -528,6 +544,7 @@ class AgentService : AccessibilityService() {
         val turns = if (cont) sessionTurns else ArrayList<Turn>().also { sessionTurns = it }
         var taskText = if (cont) sessionTask + "\nFOLLOW-UP from the user (after you finished; it may correct or extend what you did: use the earlier context, e.g. fix, undo or redo it): $task" else task
         if (cont && turns.isNotEmpty()) { val ob = "The user sent a follow-up (see Task).\n" + observe() + planText(); turns.last().obs = JSONArray().put(text(ob)); turns.last().observation = ob }
+        if (notes.isNotEmpty() && Regex("^(nee|neen|nope|niet|fout|verkeerd|verkeerde|ik bedoel|bedoel|dat is niet|dat klopt niet|no|wrong|that's wrong|thats wrong|i meant|i mean|not that)\\b", RegexOption.IGNORE_CASE).containsMatchIn(task.trim())) taskText += "\n(The user is CORRECTING your previous work: fix it, then call learn with one short general rule so this mistake is not repeated.)"
         var nudges = 0; var lastHash = 0; var same = 0; var finishWarned = false; var evWarned = false
         var model = cfg.model; var noThinking = false; var stall = 0; var lastDone = 0
         val escalate = { why: String -> if (!cfg.hearth && model.contains("haiku")) { model = "claude-sonnet-5-5"; noThinking = true; turns.forEach { it.assistant = stripThinking(it.assistant) }; Bus.log("⬆ $why: switching to a stronger model for this task") } }
@@ -539,7 +556,7 @@ class AgentService : AccessibilityService() {
             sessionTask = taskText
             while (turns.size > 40) turns.removeAt(0)
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = (if (facts().isEmpty()) "" else "About the user (saved memory; use it to resolve \"my mom\", \"me\", etc.):\n" + facts().joinToString("\n") + "\n\n") + (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty()) "" else "Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() + "\n(First call the plan tool.)" else "")
+            val firstText = (if (lessons().isEmpty()) "" else "Lessons from earlier corrections by the user (ALWAYS follow them):\n" + lessons().joinToString("\n") + "\n\n") + (if (facts().isEmpty()) "" else "About the user (saved memory; use it to resolve \"my mom\", \"me\", etc.):\n" + facts().joinToString("\n") + "\n\n") + (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty()) "" else "Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() + "\n(First call the plan tool.)" else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
@@ -700,6 +717,7 @@ class AgentService : AccessibilityService() {
         a.put(tool("tap_labels", "Tap several elements in order by their exact visible label/description, resolved live. Use for ANY sequence of buttons: calculator digits and operators (e.g. [\"1\",\"2\",\"multiply\",\"5\",\"equals\"]), keypads, dialers, PIN pads. Far more reliable than tapping ids one by one.", JSONObject().put("labels", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("labels")))
         a.put(tool("find_tap", "Find an element by its visible text/description (fuzzy, ignores case/accents), scrolling the page if needed, and tap it. Much faster than scrolling and tapping by hand: use for known buttons, contacts, list items, settings.", JSONObject().put("text", p("string")), listOf("text")))
         a.put(tool("remember", "Save a lasting fact about the user, very short (<= 80 chars), e.g. 'mom = Anna Peeters', 'brother = Lars (Snapchat: lars_v)', 'I am Warre, 17'. Use when the user states a relationship, name, preference or address that will matter later, or says 'remember'. Never save temporary things.", JSONObject().put("fact", p("string")), listOf("fact")))
+        a.put(tool("learn", "After the user CORRECTED you (\"no, I meant…\", \"not that one\", \"that's wrong\"), save ONE short general rule so you never repeat the mistake, e.g. \"'Jan' in Smartschool = Jan Peeters, not Jan Claes\", \"for messages to mom use WhatsApp, not SMS\", \"the calculator multiply key is labelled 'multiply'\". Specific, <= 120 chars, no passwords. Call it after you have fixed the mistake.", JSONObject().put("lesson", p("string")), listOf("lesson")))
         a.put(tool("forget", "Delete saved facts containing this text.", JSONObject().put("text", p("string")), listOf("text")))
         a.put(tool("open_url", "Open a link or intent directly: https://..., tel:+32..., sms:+32...?body=..., mailto:, geo:0,0?q=place. Opens the dialer (not an auto-call) for tel:.", JSONObject().put("url", p("string")), listOf("url")))
         a.put(tool("volume", "Set volume 0-100 for stream 'media' (default) or 'ring'.", JSONObject().put("level", p("integer")).put("stream", p("string")), listOf("level")))
@@ -765,6 +783,7 @@ class AgentService : AccessibilityService() {
                     e.apply(); "remembered"
                 }
                 "remember" -> remember(i.getString("fact"))
+                "learn" -> learn(i.getString("lesson"))
                 "forget" -> forget(i.getString("text"))
                 "plan" -> {
                     if (i.optString("screen_now").isNotBlank()) Bus.log("👁 " + i.optString("screen_now"))
@@ -1122,6 +1141,7 @@ private const val RULES = """How to work (follow strictly):
 6. The user may interrupt while you work. Lines "User then added (INTERRUPT…): ..." are new instructions: first update the to-do list with plan (add, remove, reorder or replace steps as they ask), then continue with the updated list right away. "Earlier this session" lists previous commands for context.
 7. The user may speak Dutch; match app names as installed. Spoken messages (finish.message, ask_user.question) are READ ALOUD by a voice: write natural, warm, complete sentences in the user's language (1-2 sentences, at most ~35 words), answer or result first, like a helpful person talking, not like a log. No markdown, emoji, lists, ids or technical words. Write numbers and units the way you say them ("3,14 gigabyte", "kwart over acht", "20 procent", "twee wekkers"). Ask questions naturally and briefly ("Bedoel je Jan Peeters of Jan Claes?").
 8. Names: the request comes from speech recognition, so names are often misspelled or misheard. Match names on screen approximately (ignore case/accents, similar sounds, first name only, partial text). Search with a short partial name rather than the full one. If exactly one plausible match: use it. If several or none: ask_user and read out the options.
+8a. Learning: "Lessons from earlier corrections" are rules the user taught you: follow them over your own guess. When the user corrects you (\"nee, ik bedoelde…\", \"niet die\", \"dat is fout\", \"no, I meant…\"): fix it first, then call learn with ONE short, specific rule that prevents the same mistake next time (what they meant vs what you did). Do not learn from your own failures, only from what the user told you.
 8b. Memory: "About the user" lists saved facts. Use them to resolve "mijn moeder", "mijn broer", "ik" etc. (look up the NAME from the facts in the app). When the user states a new lasting fact (who someone is, a name, preference, address) call remember with a very short fact; if a fact is wrong, forget it and remember the right one. Never save temporary or sensitive things (passwords, codes).
 9. Dropdowns, suggestion lists and dialogs appear as an extra "-- window --" section in the list: after typing into a search/recipient field, look there and tap the right entry. Recipient/contact search: type a SHORT distinctive part (3-5 letters of the last name, or the first name), wait for the suggestions, pick the entry that best matches (check class/extra info the user mentioned). If nothing matches try another spelling or the other part of the name (swap first/last, ij/y, ph/f, c/k, double letters), up to 4 attempts, then ask_user. After picking, verify the recipient shows in the field, and call remember_name if the real name differs from what was said.
 10. Several elements can share one label (e.g. icon buttons): then use a screenshot, and tap by position. Before an irreversible send/post: verify recipient, subject and text on screen (screenshot if unsure), send, then verify it was sent (screen changed, "verzonden"/sent state). If the user gave no subject, write a short fitting one yourself; don't ask.
@@ -1137,7 +1157,7 @@ private const val SYSTEM_TEXT = """You control an Android phone to complete the 
 Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
 GOAL: send a snap to Anna. Snapchat isn't open yet. [{"tool":"open_app","name":"Snapchat"}]
 Tools:
-open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{screen_now,goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | tap_labels{labels:[...]} (tap a sequence of buttons by label: digits, keypads) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | forget{text} | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{screen_now,goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | tap_labels{labels:[...]} (tap a sequence of buttons by label: digits, keypads) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | learn{lesson} (a rule from a correction by the user) | forget{text} | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
 No screenshots are available.
 $RULES
 Always end your reply with the JSON array of actions."""

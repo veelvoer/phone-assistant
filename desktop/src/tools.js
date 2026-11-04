@@ -39,6 +39,7 @@ function buildTools(ctx) {
     { question: P('string') }, ['question'], async (i) => { const a = await ctx.ask(String(i.question)); return a == null ? 'error: the user did not answer. Make your best guess or finish.' : 'User answered: ' + a; });
 
   add('remember', "Save a lasting fact about the user, very short (<= 80 chars), e.g. 'mom = Anna Peeters', 'I am Warre'. Only lasting things the user states; never passwords.", { fact: P('string') }, ['fact'], (i) => ctx.remember(String(i.fact)));
+  add('learn', 'After the user CORRECTED you ("no, I meant…", "not that one"), save ONE short general rule so you never repeat the mistake, e.g. "when I say browser I mean Firefox", "downloads go in ~/Downloads". Specific, <= 120 chars, no passwords. Call it after you fixed the mistake.', { lesson: P('string') }, ['lesson'], (i) => ctx.learn(String(i.lesson)));
   add('forget', 'Delete saved facts containing this text.', { text: P('string') }, ['text'], (i) => ctx.forget(String(i.text)));
 
   add('screenshot', 'Take a fresh screenshot of the current screen (use after waiting, or when you need to see the result of a non-GUI action).', {}, [], async () => { ctx.wantShot = true; return 'screenshot attached below'; });

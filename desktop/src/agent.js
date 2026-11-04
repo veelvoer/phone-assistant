@@ -18,6 +18,7 @@ const RULES = `How to work (follow strictly):
 5. Be efficient: fewest steps. Several tool calls per turn are fine when they do not depend on a changed screen.
 6. The user may interrupt while you work. Lines "User then added (INTERRUPT…): …" are new instructions: first update the plan, then continue. "Earlier commands this session" lists previous commands; a new message is ALWAYS a new job (a correction, an undo, a follow-up): look at the current state and do it, never reply that it is already done.
 7. The user may speak Dutch. Spoken messages (finish.message, ask_user.question) are READ ALOUD by a voice: write natural, warm, complete sentences in the user's language (1-2 sentences, at most ~35 words), result first, like a helpful person talking. No markdown, emoji, lists, paths or technical words. Say numbers and units the way you say them.
+8a. Learning: "Lessons from earlier corrections" are rules the user taught you: follow them over your own guess. When the user corrects you ("nee, ik bedoelde…", "niet die", "no, I meant…"): fix it first, then call learn with ONE short, specific rule that prevents the same mistake (what they meant vs what you did). Only learn from what the user told you, not from your own failures.
 8. Memory: "About the user" lists saved facts. Use them to resolve "my mom", "me" etc. When the user states a new lasting fact, call remember with a very short fact. Never save passwords or codes.
 9. Do everything the user says: it is their own computer. Be careful with irreversible commands (see 4).`;
 
@@ -56,7 +57,17 @@ class Agent extends EventEmitter {
     l.push(f); while (l.join('\n').length > 1800) l.shift();
     this.config.set({ facts: l.join('\n') }); this.emit('facts'); return 'remembered: ' + f;
   }
-  forget(q) { const n = norm(q); if (n.length < 2) return 'error: say what to forget'; const l = this.config.facts(); const keep = l.filter((x) => !norm(x).includes(n)); this.config.set({ facts: keep.join('\n') }); this.emit('facts'); return `forgot ${l.length - keep.length} fact(s)`; }
+  forget(q) {
+    const n = norm(q); if (n.length < 2) return 'error: say what to forget';
+    const l = this.config.facts(), keep = l.filter((x) => !norm(x).includes(n)); const ls = this.config.lessons(), lk = ls.filter((x) => !norm(x).includes(n));
+    this.config.set({ facts: keep.join('\n'), lessons: lk.join('\n') }); this.emit('facts'); return `forgot ${l.length - keep.length + ls.length - lk.length} item(s)`;
+  }
+  learn(lesson) {
+    const t = String(lesson).trim().replace(/\.$/, '').slice(0, 160); if (t.length < 8) return 'error: lesson too short';
+    const n = norm(t); const l = this.config.lessons().filter((x) => { const o = norm(x); return !(o === n || o.includes(n) || n.includes(o)); }); l.push(t);
+    while (l.join('\n').length > 1800) l.shift();
+    this.config.set({ lessons: l.join('\n') }); this.log('🎓 learned: ' + t); this.emit('facts'); return 'learned: ' + t;
+  }
 
   // ---- screen ----
   async freshShot() {
@@ -151,6 +162,7 @@ class Agent extends EventEmitter {
     const escalate = (why) => { if (!hearth && model.includes('haiku')) { model = 'claude-sonnet-5-5'; noThinking = true; turns.forEach((t) => { t.assistant = stripThinking(t.assistant); }); this.log(`⬆ ${why}: switching to a stronger model for this task`); } };
     const turns = [];
     let taskText = task;
+    if (this.notes.length && /^(nee|neen|nope|niet|fout|verkeerd|verkeerde|ik bedoel|bedoel|dat is niet|dat klopt niet|no|wrong|that's wrong|thats wrong|i meant|i mean|not that)\b/i.test(task.trim())) taskText += '\n(The user is CORRECTING your previous work: fix it, then call learn with one short general rule so this mistake is not repeated.)';
     let first = !hearth ? await this.freshShot() : null;
     const winLine = await this.windowsLine();
 
@@ -158,7 +170,8 @@ class Agent extends EventEmitter {
       while (this.extras.length) { const x = this.extras.shift(); taskText += `\nUser then added (INTERRUPT: update your plan to reflect this, then continue): ${x}`; this.log('➕ ' + x); }
       if (this.stopFlag) { this.log('■ Stopped'); return; }
       const facts = this.config.facts(), names = this.config.names(), aliases = this.config.aliases();
-      const head = (facts.length ? `About the user (saved memory; use it to resolve "my mom", "me", etc.):\n${facts.join('\n')}\n\n` : '')
+      const lessons = this.config.lessons();
+      const head = (lessons.length ? `Lessons from earlier corrections by the user (ALWAYS follow them):\n${lessons.join('\n')}\n\n` : '') + (facts.length ? `About the user (saved memory; use it to resolve "my mom", "me", etc.):\n${facts.join('\n')}\n\n` : '')
         + (names.length ? `Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): ${names.join(', ')}${aliases.length ? '\nLearned corrections (heard=actual): ' + aliases.join('; ') : ''}\n\n` : '')
         + (this.notes.length ? `Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n${this.notes.join('\n')}\n\n` : '');
       const firstText = head + `Task: ${taskText}` + (turns.length === 0 ? `\n\n${winLine}\n(First call the plan tool.)` : '');
@@ -257,7 +270,7 @@ class Agent extends EventEmitter {
       get shotInfo() { return self.shotInfo; }, get wantShot() { return self.wantShot; }, set wantShot(v) { self.wantShot = v; },
       get pendingImages() { return self.pendingImages; }, get scrollStreak() { return self.scrollStreak; }, set scrollStreak(v) { self.scrollStreak = v; },
       freshShot: () => this.freshShot(), log: (m) => this.log(m), emit: (e, d) => this.emit(e, d),
-      remember: (f) => this.remember(f), forget: (q) => this.forget(q),
+      remember: (f) => this.remember(f), forget: (q) => this.forget(q), learn: (l) => this.learn(l),
       ask: (q) => { this.log('❓ ' + q); this.speakImpl(q); this.emit('ask', q); return new Promise((res) => { this.pendingAsk = (a) => { this.pendingAsk = null; res(a); }; this.emit('asking', q); }); },
     };
   }

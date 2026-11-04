@@ -47,6 +47,12 @@ for (const f of fs.readdirSync(path.join(__dirname, '../src/renderer')).filter((
   // dangerous shell blocked
   const { buildTools } = require('../src/tools'); const t = buildTools({ ...a.makeCtx(), config: cfg }); const sh = t.find((x) => x.name === 'shell');
   assert.ok((await sh.run({ command: 'rm -rf ~/x' })).startsWith('blocked')); assert.ok((await sh.run({ command: 'ls' })).includes('exit 0'));
+  // learning from corrections
+  assert.ok(a.learn("'Jan' = Jan Peeters, niet Jan Claes").startsWith('learned')); assert.ok(cfg.lessons().length === 1);
+  a.learn("'Jan' = Jan Peeters, niet Jan Claes (Smartschool)"); assert.strictEqual(cfg.lessons().length, 1, 'refined lesson replaces the old one');
+  n = 5; script.push((b) => { const t0 = b.messages[0].content[0].text; assert.ok(t0.includes('Lessons from earlier corrections') && t0.includes('Jan Peeters')); assert.ok(t0.includes('CORRECTING your previous work')); return { content: [{ type: 'tool_use', id: 'v1', name: 'plan', input: { goal: 'g', done_when: 'd', items: [] } }, { type: 'tool_use', id: 'v2', name: 'finish', input: { message: 'ok', evidence: 'e' } }] }; });
+  await a.run('nee, ik bedoelde Jan Claes');
+  assert.ok(a.forget('Jan Peeters').includes('forgot') && cfg.lessons().length === 0);
   const { explain } = require('../src/errors');
   assert.ok(/API-sleutel/.test(explain('API 401: invalid x-api-key', true))); assert.ok(/credit/.test(explain('API 400: Your credit balance is too low', false))); assert.ok(/internet/.test(explain('NETWORK: fetch failed', true)));
   // network failure is retried and then reported, not a crash

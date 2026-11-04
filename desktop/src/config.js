@@ -6,7 +6,7 @@ const DEFAULTS = {
   provider: 'claude', apiKey: '', model: 'claude-haiku-5-5', smartPlan: true,
   hearthUrl: '', hearthKey: '', hearthModel: 'haiku',
   lang: 'nl', speak: true, loud: 1, voiceName: '', whisperModel: 'small',
-  facts: '', names: '', aliases: '',
+  facts: '', lessons: '', names: '', aliases: '',
   hotkey: 'Ctrl+Alt+Space', hotkeyBound: false, accent: '',
   balance: null, spentSince: 0, spentTotal: 0, spentToday: 0, day: '',
   costCap: 0.3, confirmDestructive: true, overlay: true,
@@ -26,6 +26,7 @@ class Config {
     for (const l of this.listeners) l(patch);
   }
   onChange(f) { this.listeners.add(f); }
+  lessons() { return String(this.data.lessons || '').split('\n').map((s) => s.trim()).filter(Boolean); }
   facts() { return String(this.data.facts || '').split('\n').map((s) => s.trim()).filter(Boolean); }
   names() {
     const raw = String(this.data.names || '').split(/[,\n]/).map((s) => s.trim()).filter(Boolean);

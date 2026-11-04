@@ -16,7 +16,7 @@ async function init() {
   $('warnings').innerHTML = d.problems.map((p) => `<div class="warn">⚠ ${p}</div>`).join('');
   paintSeg('provider', cfg.provider); paintProvider(); paintSeg('lang', cfg.lang); paintSeg('whisper', cfg.whisperModel); seg('provider', 'provider'); seg('lang', 'lang'); seg('whisper', 'whisperModel');
   bind('apiKey', 'apiKey'); bind('model', 'model'); bind('hearthUrl', 'hearthUrl'); bind('hearthKey', 'hearthKey'); bind('hearthModel', 'hearthModel'); bind('smartPlan', 'smartPlan', 'bool'); bind('confirmDestructive', 'confirmDestructive', 'bool'); bind('costCap', 'costCap', 'num');
-  bind('speak', 'speak', 'bool'); $('hotkey').value = cfg.hotkey; hkInfo(d.hypr); bind('facts', 'facts'); bind('names', 'names'); bind('overlay', 'overlay', 'bool'); bind('accent', 'accent');
+  bind('speak', 'speak', 'bool'); $('hotkey').value = cfg.hotkey; hkInfo(d.hypr); bind('facts', 'facts'); bind('lessons', 'lessons'); bind('names', 'names'); bind('overlay', 'overlay', 'bool'); bind('accent', 'accent');
   $('balance').value = d.usage.left == null ? '' : d.usage.left.toFixed(2); $('balance').addEventListener('change', () => set({ balance: $('balance').value === '' ? null : Number($('balance').value) }));
   $('modelChips').querySelectorAll('.chip').forEach((c) => c.addEventListener('click', () => { $('model').value = c.dataset.m; set({ model: c.dataset.m }); }));
   $('ttsInfo').textContent = 'Voice: ' + d.tts; $('sysInfo').textContent = d.platform; $('themeInfo').textContent = `Accent: ${d.theme.accent} (from ${d.theme.source})`;
@@ -61,7 +61,7 @@ document.addEventListener('keydown', async (e) => {
 $('copySnippet').addEventListener('click', () => { navigator.clipboard.writeText($('hyprSnippet').textContent); toast('Copied'); });
 let updUrl = ''; A.on('update', (u) => { updUrl = u.url; $('update').hidden = false; $('updT').textContent = 'Update available: v' + u.version; $('updN').textContent = u.notes; });
 $('updB').addEventListener('click', () => A.invoke('update:open', updUrl)); $('checkUpd').addEventListener('click', () => A.invoke('update:check'));
-A.on('log', addLog); A.on('plan', paintPlan); A.on('usage', stats); A.on('status', setStatus); A.on('toast', toast); A.on('facts', (f) => { if (document.activeElement !== $('facts')) $('facts').value = f.join('\n'); });
+A.on('log', addLog); A.on('plan', paintPlan); A.on('usage', stats); A.on('status', setStatus); A.on('toast', toast); A.on('facts', async (f) => { if (document.activeElement !== $('facts')) $('facts').value = f.join('\n'); const d = await A.invoke('cfg:all'); cfg.lessons = d.cfg.lessons; if (document.activeElement !== $('lessons')) $('lessons').value = d.cfg.lessons || ''; });
 A.on('stt', (s) => { if (s.progress != null && s.progress < 1) $('sttInfo').textContent = `Downloading speech model… ${Math.round(s.progress * 100)}%`; if (s.ready) $('sttInfo').textContent = 'Speech model ready.'; });
 $('mic').innerHTML = ICON.mic; $('run').innerHTML = ICON.play + ' Run';
 init();

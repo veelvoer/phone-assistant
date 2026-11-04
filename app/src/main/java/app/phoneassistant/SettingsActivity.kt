@@ -19,6 +19,7 @@ class SettingsActivity : Activity() {
     private lateinit var url: EditText
     private lateinit var names: EditText
     private lateinit var memory: EditText
+    private lateinit var lessons: EditText
     private lateinit var balance: EditText
     private lateinit var keyHint: TextView
     private lateinit var voiceName: TextView
@@ -98,10 +99,13 @@ class SettingsActivity : Activity() {
         // ---- Memory
         root.addView(ui.sectionTitle("Memory"))
         memory = ui.field("e.g.\nI am Warre\nmom = Anna Peeters\nbrother = Lars (Snapchat: lars_v)", multi = true).apply { minLines = 5; setText(p.getString("facts", "")) }
+        lessons = ui.field("Nothing learned yet", multi = true).apply { minLines = 3; setText(p.getString("lessons", "")) }
         names = ui.field("Names & words you use, comma separated").apply { setText(p.getString("names", "")) }
         root.addView(ui.card(
             ui.tv("About you", 15f, c.onSurface, true),
             ui.tv("One short fact per line: who you are, family, friends. Sent with every task so it knows who “my mom” is. You can also say “onthoud dat …”.", 12f, c.onSurfaceV).apply { layoutParams = ui.lp(top = 2) }, memory,
+            ui.tv("Lessons it learned from your corrections", 15f, c.onSurface, true).apply { layoutParams = ui.lp(top = 18) },
+            ui.tv("When you say “nee, ik bedoelde …” it saves a rule here so it doesn't repeat the mistake. Edit or delete lines freely.", 12f, c.onSurfaceV).apply { layoutParams = ui.lp(top = 2) }, lessons,
             ui.tv("Names for speech recognition", 15f, c.onSurface, true).apply { layoutParams = ui.lp(top = 18) }, names
         ))
 
@@ -166,6 +170,7 @@ class SettingsActivity : Activity() {
     private fun save() {
         p.edit().putString(if (hearth) "key_h" else "key", key.text.toString().trim()).putString(if (hearth) "model_h" else "model", model.text.toString().trim())
             .putString("url", url.text.toString().trim()).putString("names", names.text.toString().trim())
+            .putString("lessons", lessons.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n"))
             .putString("facts", memory.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")).apply()
         balance.text.toString().trim().toFloatOrNull()?.let { v -> if (kotlin.math.abs(v - (Usage.left(this) ?: -1f)) > 0.004f) Usage.setBalance(this, v) }
     }
