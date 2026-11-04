@@ -74,7 +74,7 @@ class AgentService : AccessibilityService() {
 
     private val callWatch = object : Runnable {
         override fun run() {
-            if ((voice || speaking || running || ov != null) && inCall()) {
+            if (!CallManager.sessionActive() && (voice || speaking || running || ov != null) && inCall()) {
                 Bus.log("📞 call detected: assistant stopped")
                 tts?.stop(); speaking = false; abandonFocus(); boostEnd()
                 stopFlag = true; endSession(true); hideOverlay()
