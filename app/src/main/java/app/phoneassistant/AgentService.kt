@@ -95,12 +95,13 @@ class AgentService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        CallManager.watch(this)
         main.removeCallbacks(callWatch); main.postDelayed(callWatch, 800)
         tts = TextToSpeech(this) { ttsReady = it == TextToSpeech.SUCCESS }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {}
-            override fun onDone(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec() } }
-            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec() } }
+            override fun onDone(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); speechFinished() } }
+            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); speechFinished() } }
         })
     }
     @Volatile private var lastEvent = 0L
@@ -142,9 +143,34 @@ class AgentService : AccessibilityService() {
         return "plan updated (${l.count { it.status == "done" }}/${l.size} done)"
     }
 
+    fun callConfig(): Cfg? = cfgFromPrefs()
+    fun runTask(task: String) = startFromPrefs(task)
+
+    /** Click the first visible control (in any window, including the in-call screen) whose text or description matches. */
+    fun clickByLabel(re: Regex): Boolean {
+        for (w in windows) {
+            val root = w.root ?: continue
+            if (root.packageName == packageName) continue
+            var hit: AccessibilityNodeInfo? = null
+            fun walk(n: AccessibilityNodeInfo) {
+                if (hit != null || !n.isVisibleToUser) return
+                val t = ((n.text ?: n.contentDescription) ?: "").toString()
+                if (t.isNotEmpty() && t.length < 40 && re.containsMatchIn(t)) { hit = n; return }
+                for (k in 0 until n.childCount) n.getChild(k)?.let { walk(it) }
+            }
+            walk(root)
+            val n = hit ?: continue
+            var c: AccessibilityNodeInfo? = n; var d = 0
+            while (c != null && !c.isClickable && d < 6) { c = c.parent; d++ }
+            if (c?.isClickable == true && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+            val r = Rect(); n.getBoundsInScreen(r); tapAt(r.centerX(), r.centerY(), 50); return true
+        }
+        return false
+    }
+
     fun startFromPrefs(task: String) { main.post { cfgFromPrefs()?.let { start(task, it) } ?: Bus.log("No API key saved in the app") } }
 
-    fun stop() { clearAnn(); stopFlag = true; main.post { endSession(false) } }
+    fun stop() { clearAnn(); board?.hide(); stopFlag = true; main.post { endSession(false) } }
 
     // ---------- Essential Key: press and hold to talk ----------
     private var rec: SpeechRecognizer? = null
@@ -198,7 +224,43 @@ class AgentService : AccessibilityService() {
     private val extras = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private val stopWords = setOf("stop", "stoppen", "stop maar", "stop met luisteren", "klaar", "dat was het", "annuleer", "annuleren", "cancel", "that's all", "exit", "stop listening")
 
-    private fun buzz(ms: Long = 40) = (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+    fun pref() = getSharedPreferences("p", MODE_PRIVATE)
+    /** Recognition quality (Settings → Voice): 0 fast, 1 balanced, 2 accurate. */
+    private fun sttSilenceMs(): Long = longArrayOf(1100L, 1800L, 2600L)[pref().getInt("stt_level", 1).coerceIn(0, 2)]
+    private fun sttMaxResults(): Int = intArrayOf(3, 5, 8)[pref().getInt("stt_level", 1).coerceIn(0, 2)]
+
+    fun isQuiet(): Boolean {
+        val p = pref(); if (!p.getBoolean("q_on", false)) return false
+        val c = java.util.Calendar.getInstance(); val cur = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE)
+        val a = p.getInt("q_from", 22 * 60); val b = p.getInt("q_to", 8 * 60)
+        return if (a <= b) cur in a until b else cur >= a || cur < b
+    }
+
+    private fun persona(): String {
+        val p = pref(); val name = p.getString("ai_name", "Assistant").orEmpty().ifBlank { "Assistant" }
+        val tone = when (p.getString("ai_tone", "friendly")) { "neutral" -> "Be neutral and clear."; "concise" -> "Be extremely brief and businesslike."; "playful" -> "Be light-hearted and a little playful (never at the cost of clarity)."; else -> "Be warm, friendly and natural." }
+        val len = when (p.getString("ai_len", "short")) { "normal" -> "Spoken messages: 2-3 sentences with the key details."; "detailed" -> "Spoken messages: up to 5 sentences when explaining; still no lists or markdown."; else -> "Spoken messages: 1-2 short sentences." }
+        return "Your name is $name. $tone $len"
+    }
+
+    private var toneGen: android.media.ToneGenerator? = null
+    /** Short UI sounds: kind = start | stop | done | error. */
+    private fun chime(kind: String) {
+        if (!pref().getBoolean("sounds", true) || isQuiet()) return
+        try {
+            val g = toneGen ?: android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 55).also { toneGen = it }
+            g.startTone(when (kind) { "start" -> android.media.ToneGenerator.TONE_PROP_ACK; "done" -> android.media.ToneGenerator.TONE_PROP_PROMPT; "error" -> android.media.ToneGenerator.TONE_PROP_NACK; else -> android.media.ToneGenerator.TONE_PROP_BEEP2 }, 160)
+        } catch (e: Exception) { }
+    }
+
+    /** Live preview for Settings → Appearance. */
+    fun previewOverlay() = main.post {
+        ov?.rebuild()
+        ov().update(Overlay.State.WORKING, "Preview", "This is how I look", "2/4 · Customize me", 0.5f)
+        main.postDelayed({ if (!running && !voice && !asking) hideOverlay() else refreshOverlay() }, 4500)
+    }
+
+    private fun buzz(ms: Long = 40) { if (pref().getBoolean("haptics", true)) (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE)) }
 
     private fun refreshOverlay() = main.post {
         val cur = todos.firstOrNull { it.status == "doing" } ?: todos.firstOrNull { it.status == "pending" }
@@ -216,7 +278,7 @@ class AgentService : AccessibilityService() {
         }
     }
 
-    private fun showResult(m: String) { resultText = m; resultUntil = System.currentTimeMillis() + 4500; refreshOverlay(); main.postDelayed({ refreshOverlay() }, 4600) }
+    private fun showResult(m: String, error: Boolean = false) { val hold = (OverlayStyle.load(this).holdSec * 1000).toLong(); resultText = m; resultUntil = System.currentTimeMillis() + hold; refreshOverlay(); main.postDelayed({ refreshOverlay() }, hold + 100); chime(if (error) "error" else "done") }
 
 
     /** Quick Settings tile / app: start or stop the voice session. */
@@ -225,16 +287,19 @@ class AgentService : AccessibilityService() {
     private fun notice(t: String) { showOverlay(t); main.postDelayed({ refreshOverlay() }, 3000) }
 
     private fun listen() {
+        if (CallManager.sessionActive()) { CallManager.endSession("you pressed the button"); return }
         if (voice) { endSession(true); return }
-        if (inCall()) { notice("In a call: assistant stays quiet"); return }
-        if (voipActive()) { notice("Another app is using call audio (a call, or an app that forgot to release it). Close it and try again."); return }
+        if (inCall() || voipActive()) {
+            if (CallManager.enabled(this)) { CallManager.startFromKey(this); return }
+            notice(if (inCall()) "In a call: assistant stays quiet. Turn on call assistance in Settings → Calls to let it talk." else "Another app is using call audio (a call, or an app that forgot to release it). Close it and try again."); return
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { notice("Open Assistant once and allow the microphone"); return }
         val c = cfgFromPrefs()
         if (c == null) { notice("Add your API key in the Assistant app first"); return }
         voiceCfg = c; beginVoice()
     }
 
-    private fun beginVoice() { voice = true; errStreak = 0; partial = ""; buzz(); refreshOverlay(); startRec() }
+    private fun beginVoice() { voice = true; errStreak = 0; partial = ""; buzz(); chime("start"); refreshOverlay(); startRec() }
 
     private fun endSession(announce: Boolean) {
         if (announce) stopFlag = true
@@ -271,9 +336,10 @@ class AgentService : AccessibilityService() {
             override fun onEndOfSpeech() {}
             override fun onEvent(t: Int, b: Bundle?) {}
         })
-        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true).putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
-            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true).putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, sttMaxResults())
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, sttSilenceMs())
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, sttSilenceMs())
+            .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, pref().getBoolean("stt_offline", false))
         val lang = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
         names().takeIf { it.isNotEmpty() }?.let { i.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(it)) }
         if (lang.isNotEmpty()) i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang).putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
@@ -366,11 +432,15 @@ class AgentService : AccessibilityService() {
         return x.replace(Regex("\\s+"), " ").trim()
     }
 
-    fun testVoice() { speak(if (langTag().startsWith("nl") || (langTag().isEmpty() && Locale.getDefault().language == "nl")) "Hoi! Dit is mijn stem. Zo klink ik als ik je een antwoord geef." else "Hi! This is my voice. This is how I sound when I answer you.") }
+    fun testVoice() { speak(force = true, t = if (langTag().startsWith("nl") || (langTag().isEmpty() && Locale.getDefault().language == "nl")) "Hoi! Dit is mijn stem. Zo klink ik als ik je een antwoord geef." else "Hi! This is my voice. This is how I sound when I answer you.") }
 
-    private fun speak(t: String) = main.post {
-        val e = tts ?: return@post
-        if (!ttsReady || t.isBlank() || inCall() || voipActive() || !getSharedPreferences("p", MODE_PRIVATE).getBoolean("speak", true)) return@post
+    /** Called once when the current spoken sentence has finished (used by phone-call conversations). */
+    var onSpeechDone: (() -> Unit)? = null
+    private fun speechFinished() { val cb = onSpeechDone; onSpeechDone = null; cb?.invoke() }
+
+    fun speak(t: String, force: Boolean = false) = main.post {
+        val e = tts
+        if (e == null || !ttsReady || t.isBlank() || (!force && (inCall() || voipActive() || isQuiet() || !pref().getBoolean("speak", true)))) { speechFinished(); return@post }
         speaking = true; rec?.cancel(); rec?.destroy(); rec = null
         val tag = langTag(); val loc = if (tag.isEmpty()) Locale.getDefault() else Locale.forLanguageTag(tag)
         e.language = loc
@@ -384,7 +454,7 @@ class AgentService : AccessibilityService() {
         val txt = speechText(t).take(700)
         if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, params, "u") != TextToSpeech.SUCCESS) { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); return@post }
         // never stay deaf if the "done" callback gets lost
-        main.postDelayed({ if (speaking) { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec() } }, 2500L + txt.length * 80L)
+        main.postDelayed({ if (speaking) { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); speechFinished() } }, 2500L + txt.length * 80L)
     }
 
     /** Blocks the agent thread until the user answers by voice. */
@@ -435,8 +505,10 @@ class AgentService : AccessibilityService() {
     fun start(task: String, cfg: Cfg): Boolean {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { start(task, cfg) }; return true }
         if (running) return false
-        clearAnn(); Usage.beginTask()
+        clearAnn(); board?.hide(); Usage.beginTask()
         if (shortcut(task)) return true
+        val dl = pref().getFloat("daily_limit", 0f)
+        if (dl > 0f && !cfg.hearth && Usage.today(this) >= dl) { val say = if (langTag().startsWith("nl")) "Je daglimiet van ${'$'}%.2f is bereikt.".format(dl) else "Your daily limit of ${'$'}%.2f is reached.".format(dl); Bus.log("■ $say"); speak(say); showResult(say); return true }
         val cont = false
         running = true; stopFlag = false; if (!cont) todos = emptyList()
         refreshOverlay(); Bus.listener?.invoke()
@@ -447,7 +519,7 @@ class AgentService : AccessibilityService() {
             try { loop(task, cfg, cont) } catch (e: Throwable) {
                 val raw = e.message ?: e.javaClass.simpleName
                 Bus.log("Error: $raw")
-                if (raw != "stopped") { val say = Errors.explain(raw, langTag().startsWith("nl") || (langTag().isEmpty() && Locale.getDefault().language == "nl")); speak(say); showResult(say) }
+                if (raw != "stopped") { val say = Errors.explain(raw, langTag().startsWith("nl") || (langTag().isEmpty() && Locale.getDefault().language == "nl")); speak(say); showResult(say, true) }
             }
             if (!noted) addNote(task, "(did not finish: stopped or failed)")
             Bus.log("💰 " + Usage.taskLine(cfg.hearth))
@@ -521,6 +593,7 @@ class AgentService : AccessibilityService() {
         "wait" -> "Waiting…"
         "read_screen" -> "Reading the screen"
         "open_url" -> "Opening link"
+        "draw" -> "Drawing for you"
         "volume" -> "Setting volume"
         "ask_user" -> "Asking you"
         "plan" -> statusLine.ifEmpty { "Planning" }
@@ -581,8 +654,8 @@ class AgentService : AccessibilityService() {
             // forcing a tool is only supported on the Haiku models; Sonnet/Opus 5.5 reject it (they follow the instructions instead)
             if (!hearth && callModel.contains("haiku")) body.put("tool_choice", if (planCall) JSONObject().put("type", "tool").put("name", "plan") else JSONObject().put("type", "any"))
             if (!hearth && callModel.contains("sonnet")) body.put("output_config", JSONObject().put("effort", "medium"))
-            if (hearth) body.put("system", SYSTEM_TEXT).put("stream", false)
-            else body.put("system", JSONArray().put(JSONObject().put("type", "text").put("text", SYSTEM).put("cache_control", JSONObject().put("type", "ephemeral")))).put("tools", tools)
+            if (hearth) body.put("system", SYSTEM_TEXT + "\n" + persona()).put("stream", false)
+            else body.put("system", JSONArray().put(JSONObject().put("type", "text").put("text", SYSTEM + "\n" + persona()).put("cache_control", JSONObject().put("type", "ephemeral")))).put("tools", tools)
             statusLine = "Thinking…"; refreshOverlay()
             if (noThinking && !hearth) body.put("thinking", JSONObject().put("type", if (callModel.contains("haiku")) "disabled" else "between_tools"))
             val resp = try { Api.post(cfg.url, cfg.key, body) } catch (e: RuntimeException) {
@@ -644,7 +717,7 @@ class AgentService : AccessibilityService() {
             val doneNow = todos.count { it.status == "done" }
             if (doneNow > lastDone) { lastDone = doneNow; stall = 0 } else stall++
             if (stall >= 8) escalate("no progress for $stall steps")
-            if (!hearth && Usage.taskCost > 0.30) { Bus.log("■ Cost limit (\$0.30) reached for one task"); speak("Gestopt: deze taak werd te duur"); showResult("Stopped: cost limit reached"); return }
+            if (!hearth && Usage.taskCost > pref().getFloat("cost_cap", 0.30f)) { Bus.log("■ Cost limit reached for one task"); speak("Gestopt: deze taak werd te duur"); showResult("Stopped: cost limit reached", true); return }
             val scr = observe()
             val h = scr.hashCode()
             var warn = ""
@@ -713,6 +786,8 @@ class AgentService : AccessibilityService() {
         val item = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string")).put("status", JSONObject().put("type", "string").put("enum", JSONArray(listOf("pending", "doing", "done", "skipped"))))).put("required", JSONArray(listOf("text", "status")))
         a.put(tool("plan", "Set your GOAL and to-do list. Call it FIRST in every task (it is forced on your first turn), and again whenever a step is done/started or the user changes the task. Always send everything.", JSONObject().put("screen_now", p("string", "FIRST look at the screen list: what app and screen is this, and what on it matters for the task? one or two sentences")).put("goal", p("string", "the concrete end result the user wants, one sentence")).put("done_when", p("string", "what exactly must be visible/true on screen to prove the goal is reached")).put("items", JSONObject().put("type", "array").put("items", item)), listOf("screen_now", "goal", "done_when", "items")))
         val hi = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string", "visible text of the element, located live")).put("substring", p("string", "exact piece of the text to box only that part")).put("id", p("integer", "element id from the latest list")).put("x", p("integer")).put("y", p("integer")).put("w", p("integer")).put("h", p("integer")).put("label", p("string", "short note shown next to it")))
+        val fr = JSONObject().put("type", "object").put("properties", JSONObject().put("svg", p("string", "complete <svg viewBox='0 0 800 500'>…</svg>")).put("caption", p("string", "one or two sentences explaining this frame"))).put("required", JSONArray(listOf("svg")))
+        a.put(tool("draw", "Draw a clear visual for the user on a whiteboard card: diagrams, flows, maps, comparisons, step-by-step schemes. Give 1-6 frames (slides with captions) of SVG (viewBox 0 0 800 500, no scripts, no images). Use dark strokes and fills on the light background, accent colour #4f6bed, readable text (font-size >= 20), generous spacing, arrows with marker-end, labels near shapes. Use it when the user asks to explain, teach, sketch or visualise something.", JSONObject().put("title", p("string")).put("frames", JSONObject().put("type", "array").put("items", fr)), listOf("title", "frames")))
         a.put(tool("highlight", "Show the user something on their screen: dims the screen and outlines exactly the thing, with an optional label. Use it for 'show me / where is / which one / point out / find' requests or to point at an answer (price, button, message). Each item: text = the visible text of the element (best: located live, always accurate), plus substring = an exact piece of a long text to box only that part (e.g. a price or a name inside a paragraph); or id from the latest list; or raw pixels x,y,w,h. A screenshot is attached afterwards: check the outline, redo if off. Then finish with a short spoken explanation.", JSONObject().put("items", JSONObject().put("type", "array").put("items", hi)).put("seconds", p("integer", "how long to keep it, default 10")), listOf("items")))
         a.put(tool("tap_labels", "Tap several elements in order by their exact visible label/description, resolved live. Use for ANY sequence of buttons: calculator digits and operators (e.g. [\"1\",\"2\",\"multiply\",\"5\",\"equals\"]), keypads, dialers, PIN pads. Far more reliable than tapping ids one by one.", JSONObject().put("labels", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("labels")))
         a.put(tool("find_tap", "Find an element by its visible text/description (fuzzy, ignores case/accents), scrolling the page if needed, and tap it. Much faster than scrolling and tapping by hand: use for known buttons, contacts, list items, settings.", JSONObject().put("text", p("string")), listOf("text")))
@@ -793,6 +868,7 @@ class AgentService : AccessibilityService() {
                     setPlan(i.optJSONArray("items") ?: JSONArray())
                 }
                 "highlight" -> highlight(i)
+                "draw" -> drawBoard(i)
                 "ask_user" -> askUser(i.getString("question"))
                 "screenshot" -> { wantImage = true; "screenshot attached below" }
                 else -> "error: unknown tool"
@@ -1032,6 +1108,16 @@ class AgentService : AccessibilityService() {
         return lines
     }
 
+    private var board: Board? = null
+    private fun drawBoard(i: JSONObject): String {
+        val arr = i.optJSONArray("frames") ?: return "error: frames missing"
+        val fs = ArrayList<Board.Frame>()
+        for (k in 0 until minOf(arr.length(), 6)) { val o = arr.optJSONObject(k) ?: continue; val svg = Svg.sanitize(o.optString("svg")); if (svg.isNotEmpty()) fs.add(Board.Frame(svg, o.optString("caption").take(300))) }
+        if (fs.isEmpty()) return "error: no valid SVG (it must start with <svg viewBox=\"0 0 800 500\"> and use only shapes and text)"
+        main.post { (board ?: Board(this).also { board = it }).show(i.optString("title").take(80), fs) }
+        return "showing ${fs.size} frame(s) on the whiteboard"
+    }
+
     private fun highlight(i: JSONObject): String {
         val arr = i.optJSONArray("items") ?: return "error: items missing"
         val m = resources.displayMetrics; val screen = RectF(0f, 0f, m.widthPixels.toFloat(), m.heightPixels.toFloat())
@@ -1143,6 +1229,7 @@ private const val RULES = """How to work (follow strictly):
 8. Names: the request comes from speech recognition, so names are often misspelled or misheard. Match names on screen approximately (ignore case/accents, similar sounds, first name only, partial text). Search with a short partial name rather than the full one. If exactly one plausible match: use it. If several or none: ask_user and read out the options.
 8a. Learning: "Lessons from earlier corrections" are rules the user taught you: follow them over your own guess. When the user corrects you (\"nee, ik bedoelde…\", \"niet die\", \"dat is fout\", \"no, I meant…\"): fix it first, then call learn with ONE short, specific rule that prevents the same mistake next time (what they meant vs what you did). Do not learn from your own failures, only from what the user told you.
 8b. Memory: "About the user" lists saved facts. Use them to resolve "mijn moeder", "mijn broer", "ik" etc. (look up the NAME from the facts in the app). When the user states a new lasting fact (who someone is, a name, preference, address) call remember with a very short fact; if a fact is wrong, forget it and remember the right one. Never save temporary or sensitive things (passwords, codes).
+10. Teaching: when the user asks you to explain, teach, sketch, compare or visualise something, call draw with clean SVG frames (and say the key point in your spoken answer); a picture beats a paragraph.
 9. Dropdowns, suggestion lists and dialogs appear as an extra "-- window --" section in the list: after typing into a search/recipient field, look there and tap the right entry. Recipient/contact search: type a SHORT distinctive part (3-5 letters of the last name, or the first name), wait for the suggestions, pick the entry that best matches (check class/extra info the user mentioned). If nothing matches try another spelling or the other part of the name (swap first/last, ij/y, ph/f, c/k, double letters), up to 4 attempts, then ask_user. After picking, verify the recipient shows in the field, and call remember_name if the real name differs from what was said.
 10. Several elements can share one label (e.g. icon buttons): then use a screenshot, and tap by position. Before an irreversible send/post: verify recipient, subject and text on screen (screenshot if unsure), send, then verify it was sent (screen changed, "verzonden"/sent state). If the user gave no subject, write a short fitting one yourself; don't ask.
 11. App notes — Smartschool (be.smartschool.mobile): Berichten → "Nieuw bericht" at the bottom. In the compose screen the three header icons are ALL labeled "Verstuur": left = attach, MIDDLE (paper plane, around x=890,y=200 on a 1080-wide screen) = SEND, right = schedule. Fields: "Aan:" (recipient, shows a suggestions dropdown as "Firstname Lastname - Class"), "Onderwerp" (subject), then the message body (separate field). Recipient format when you type: try the last name or first name part.

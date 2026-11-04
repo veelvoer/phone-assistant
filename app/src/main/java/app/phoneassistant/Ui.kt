@@ -111,4 +111,49 @@ class Ui(val ctx: Context) {
     }
 
     fun page(content: View): ScrollView = ScrollView(ctx).apply { setBackgroundColor(c.bg); isFillViewport = true; overScrollMode = View.OVER_SCROLL_NEVER; addView(content) }
+
+    fun divider() = View(ctx).apply { setBackgroundColor((c.outline and 0x00FFFFFF) or 0x33000000); layoutParams = lp(-1, 1) }
+
+    /** Category row: round icon, title, subtitle, chevron. */
+    fun navRow(iconRes: Int, title: String, sub: String, onClick: () -> Unit): LinearLayout = LinearLayout(ctx).apply {
+        gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(12), dp(12), dp(12)); isClickable = true; background = ripple(0, shape(0x00000000, 22))
+        addView(FrameLayout(ctx).apply { background = shape(c.primaryC, 20); layoutParams = lp(dp(40), dp(40), right = 14); addView(icon(iconRes, c.onPrimaryC, 22).apply { layoutParams = FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER) }) })
+        addView(LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; layoutParams = lp(0, -2, weight = 1f); addView(tv(title, 16f, c.onSurface, true)); if (sub.isNotEmpty()) addView(tv(sub, 12f, c.onSurfaceV).apply { layoutParams = lp(top = 2) }) })
+        addView(icon(R.drawable.ic_chevron, c.onSurfaceV, 22))
+        setOnClickListener { onClick() }
+    }
+
+    fun slider(title: String, sub: String, min: Int, max: Int, value: Int, fmt: (Int) -> String, onChange: (Int) -> Unit): LinearLayout {
+        val label = tv(fmt(value), 13f, c.onSurfaceV)
+        val bar = SeekBar(ctx).apply {
+            this.max = max - min; progress = value - min
+            progressTintList = ColorStateList.valueOf(c.primary); thumbTintList = ColorStateList.valueOf(c.primary); progressBackgroundTintList = ColorStateList.valueOf(c.outline)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, u: Boolean) { label.text = fmt(p + min) }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) { onChange(progress + min) }
+            })
+        }
+        return LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL; layoutParams = lp(top = 14)
+            addView(LinearLayout(ctx).apply { gravity = Gravity.CENTER_VERTICAL; addView(tv(title, 15f, c.onSurface, true).apply { layoutParams = lp(0, -2, weight = 1f) }); addView(label) })
+            if (sub.isNotEmpty()) addView(tv(sub, 12f, c.onSurfaceV).apply { layoutParams = lp(top = 2) })
+            addView(bar, lp(top = 4))
+        }
+    }
+
+    /** colors[0] = 0 means "system colours". */
+    fun swatches(selected: Int, colors: List<Int>, onPick: (Int) -> Unit): HorizontalScrollView {
+        val row = LinearLayout(ctx).apply { gravity = Gravity.CENTER_VERTICAL }
+        val views = ArrayList<Pair<Int, View>>()
+        fun paint(sel: Int) = views.forEach { (col, v) -> v.background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(if (col == 0) c.primary else col); setStroke(dp(if (col == sel) 3 else 1), if (col == sel) c.onSurface else c.outline) } }
+        for (col in colors) {
+            val v = FrameLayout(ctx).apply { layoutParams = lp(dp(38), dp(38), right = 10); isClickable = true
+                if (col == 0) addView(tv("A", 14f, c.onPrimary, true).apply { gravity = Gravity.CENTER; layoutParams = FrameLayout.LayoutParams(-1, -1) }) }
+            views.add(col to v); row.addView(v); v.setOnClickListener { paint(col); onPick(col) }
+        }
+        paint(selected)
+        return HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(row); layoutParams = lp(top = 10) }
+    }
 }
+

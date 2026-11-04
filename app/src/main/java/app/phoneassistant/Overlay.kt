@@ -16,6 +16,22 @@ import android.widget.TextView
 import kotlin.math.abs
 import kotlin.math.sin
 
+/** The user's overlay choices (Settings → Appearance). */
+class OverlayStyle(
+    val glow: Boolean = true, val glowWidth: Int = 2, val glowIntensity: Int = 80, val glowSpeed: Int = 2,
+    val top: Boolean = false, val size: Int = 1, val alpha: Int = 94, val radius: Int = 28,
+    val bars: Boolean = true, val progress: Boolean = true, val accent: Int = 0, val holdSec: Float = 4.5f,
+) {
+    companion object {
+        fun load(c: Context): OverlayStyle {
+            val p = c.getSharedPreferences("p", Context.MODE_PRIVATE)
+            return OverlayStyle(p.getBoolean("ov_glow", true), p.getInt("ov_gw", 2), p.getInt("ov_gi", 80), p.getInt("ov_gs", 2),
+                p.getString("ov_pos", "bottom") == "top", p.getInt("ov_size", 1), p.getInt("ov_alpha", 94), p.getInt("ov_radius", 28),
+                p.getBoolean("ov_bars", true), p.getBoolean("ov_prog", true), p.getInt("ov_accent", 0), p.getFloat("ov_hold", 4.5f))
+        }
+    }
+}
+
 /** Gemini-style assistant overlay: a glowing gradient edge around the screen plus a glass card at the bottom. */
 class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
     enum class State { LISTENING, WORKING, ASKING, INFO }
@@ -26,7 +42,24 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
     private fun dpi(v: Float) = (v * d).toInt()
 
     private val pal = Pal(ctx)
-    private val colors = intArrayOf(pal.a400, pal.a200, pal.a600, pal.a300, pal.a400)
+    private var st = OverlayStyle.load(ctx)
+    private var colors = palette()
+
+    /** Gradient for the glow: the user's accent (three shades) or the system colours. */
+    private fun palette(): IntArray {
+        if (st.accent == 0) return intArrayOf(pal.a400, pal.a200, pal.a600, pal.a300, pal.a400)
+        val hsv = FloatArray(3); Color.colorToHSV(st.accent, hsv)
+        fun shade(dh: Float, s: Float, v: Float) = Color.HSVToColor(floatArrayOf((hsv[0] + dh + 360f) % 360f, (hsv[1] * s).coerceIn(0f, 1f), (hsv[2] * v).coerceIn(0f, 1f)))
+        val a = st.accent; val b = shade(18f, 0.85f, 1f); val c = shade(-18f, 0.9f, 0.9f); val d2 = shade(0f, 0.55f, 1f)
+        return intArrayOf(a, b, c, d2, a)
+    }
+
+    /** Remove the views at once (used when a setting changed) so the next update() builds them again with the new style. */
+    fun rebuild() {
+        val c = card; val g = glow; card = null; glow = null; shownState = null; lastText = ""
+        c?.let { runCatching { wm.removeView(it) } }; g?.let { runCatching { wm.removeView(it) }; it.stop() }
+        st = OverlayStyle.load(ctx); colors = palette()
+    }
 
     private var glow: Glow? = null
     private var card: LinearLayout? = null
@@ -57,9 +90,9 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
         title!!.text = titleS
         if (textS != lastText) { text!!.alpha = 0.3f; text!!.text = textS; text!!.animate().alpha(1f).setDuration(160).start(); lastText = textS }
         sub!!.text = subS ?: ""; sub!!.visibility = if (subS.isNullOrEmpty()) View.GONE else View.VISIBLE
-        bar!!.visibility = if (progress > 0f) View.VISIBLE else View.GONE; bar!!.setProgress(progress)
+        bar!!.visibility = if (progress > 0f && st.progress) View.VISIBLE else View.GONE; bar!!.setProgress(progress)
         wave!!.state = state
-        glow!!.target = when (state) { State.LISTENING -> 1f; State.WORKING -> 0.9f; State.ASKING -> 1f; State.INFO -> 0f }
+        glow!!.target = if (!st.glow) 0f else when (state) { State.LISTENING -> 1f; State.WORKING -> 0.9f; State.ASKING -> 1f; State.INFO -> 0f }
         if (shownState == null) {
             c.translationY = dp(60f); c.alpha = 0f
             c.animate().translationY(0f).alpha(1f).setDuration(280).setInterpolator(DecelerateInterpolator()).start()
@@ -80,15 +113,16 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
 
     private fun ensure() {
         if (card != null) return
+        st = OverlayStyle.load(ctx); colors = palette()
         val g = Glow(ctx).also { glow = it }
         wm.addView(g, WindowManager.LayoutParams(
             -1, -1, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT))
 
-        val w = Wave(ctx).also { wave = it }
+        val w = Wave(ctx).also { wave = it; it.visibility = if (st.bars) View.VISIBLE else View.GONE }
         val t1 = TextView(ctx).apply { textSize = 11f; setTextColor(pal.muted); letterSpacing = 0.06f; isAllCaps = true }.also { title = it }
-        val t2 = TextView(ctx).apply { textSize = 17f; setTextColor(pal.text); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setLineSpacing(0f, 1.05f) }.also { text = it }
+        val t2 = TextView(ctx).apply { textSize = if (st.size == 2) 19f else 17f; setTextColor(pal.text); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setLineSpacing(0f, 1.05f) }.also { text = it }
         val t3 = TextView(ctx).apply { textSize = 12f; setTextColor(pal.muted); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }.also { sub = it }
         val b = Bar(ctx).also { bar = it }
         val col = LinearLayout(ctx).apply {
@@ -111,15 +145,15 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
         val c = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dpi(18f), dpi(14f), dpi(14f), dpi(14f))
-            background = GradientDrawable().apply { cornerRadius = dp(28f); setColor(pal.bg); setStroke(dpi(1f), pal.stroke) }
+            background = GradientDrawable().apply { cornerRadius = dp(st.radius.toFloat()); setColor((pal.bg and 0x00FFFFFF) or ((st.alpha.coerceIn(30, 100) * 255 / 100) shl 24)); setStroke(dpi(1f), pal.stroke) }
             elevation = dp(10f)
             addView(row)
         }
         card = c
         wm.addView(c, WindowManager.LayoutParams(
-            ctx.resources.displayMetrics.widthPixels - dpi(28f), -2, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            when (st.size) { 0 -> (ctx.resources.displayMetrics.widthPixels * 0.78f).toInt(); 2 -> ctx.resources.displayMetrics.widthPixels - dpi(12f); else -> ctx.resources.displayMetrics.widthPixels - dpi(28f) }, -2, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
-            PixelFormat.TRANSLUCENT).apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; y = dpi(26f) })
+            PixelFormat.TRANSLUCENT).apply { gravity = (if (st.top) Gravity.TOP else Gravity.BOTTOM) or Gravity.CENTER_HORIZONTAL; y = if (st.top) dpi(52f) else dpi(26f) })
         g.start()
     }
 
@@ -135,7 +169,7 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
         private val anim = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 3600; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
             addUpdateListener {
-                angle = (angle + 2.2f) % 360f
+                angle = (angle + 2.2f * (when (st.glowSpeed) { 1 -> 0.5f; 3 -> 1.8f; else -> 1f })) % 360f
                 smooth += (level - smooth) * 0.25f
                 a += (target - a) * 0.12f
                 invalidate()
@@ -151,8 +185,9 @@ class Overlay(private val ctx: Context, private val onStop: () -> Unit) {
             m.setRotate(angle, w / 2, h / 2); shader!!.setLocalMatrix(m); p.shader = shader
             val pulse = 0.75f + 0.25f * smooth + 0.1f * sin(angle / 28f)
             val r = dp(46f)
-            val layers = floatArrayOf(34f, 22f, 12f, 5f, 2.2f)
-            val alphas = floatArrayOf(0.10f, 0.18f, 0.32f, 0.6f, 1f)
+            val wm2 = when (st.glowWidth) { 1 -> 0.6f; 3 -> 1.5f; else -> 1f }; val inten = st.glowIntensity / 80f
+            val layers = floatArrayOf(34f * wm2, 22f * wm2, 12f * wm2, 5f * wm2, 2.2f * wm2)
+            val alphas = floatArrayOf(0.10f * inten, 0.18f * inten, 0.32f * inten, 0.6f * inten, 1f * inten)
             for (i in layers.indices) {
                 p.strokeWidth = dp(layers[i]) * (0.85f + 0.3f * smooth)
                 p.alpha = (255 * alphas[i] * a * pulse).toInt().coerceIn(0, 255)
