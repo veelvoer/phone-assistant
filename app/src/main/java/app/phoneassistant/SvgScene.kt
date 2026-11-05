@@ -22,7 +22,6 @@ class SvgScene(svg: String) {
 
     private class St(var fill: Int? = Color.BLACK, var stroke: Int? = null, var sw: Float = 1f, var size: Float = 16f, var align: Paint.Align = Paint.Align.LEFT, var opacity: Float = 1f)
 
-    init { try { parse(svg) } catch (e: Exception) { error = e.toString() + " @ " + e.stackTrace.take(3).joinToString { it.toString() } } ; schedule() }
 
     private fun num(s: String?, def: Float = 0f): Float = s?.let { Regex("[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?").find(it)?.value?.toFloatOrNull() } ?: def
     private fun nums(s: String?): List<Float> = Regex("[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?").findAll(s ?: "").mapNotNull { it.value.toFloatOrNull() }.toList()
@@ -144,6 +143,9 @@ class SvgScene(svg: String) {
         }
         totalMs = t + 300L
     }
+
+    // must stay below the property initialisers above (NAMED…): Kotlin runs them in textual order
+    init { try { parse(svg) } catch (e: Exception) { error = e.toString() + " @ " + e.stackTrace.take(3).joinToString { it.toString() } } ; schedule() }
 }
 
 /** SVG path data ("M10 10 L20 20 C…") into an android Path. */
