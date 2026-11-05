@@ -40,6 +40,8 @@ The default hotkey is `Ctrl+Alt+Space` (configurable). Speech output uses the in
 - `Assistant --toggle` (or the hotkey): starts/stops a **voice session**. It keeps listening; every sentence is a command; say "stop"/"stoppen"/"klaar" to end. New sentences while it works are added to the task. Questions it asks you are spoken and you answer by voice.
 - `--ask`: small prompt box. `--run "text"`: run a task. `--stop`, `--show`.
 - Speech recognition is **local** (Whisper via onnxruntime): the model (~250 MB for *Small*, ~80 MB for *Base*) downloads once on first use. Names from your Memory are used to correct what it heard.
+- **Draws on your screen:** ask it to explain something and it draws the diagram live over your screen (the screen dims a little, strokes appear one by one with a pen cursor, captions fade in). Step through the slides from the card.
+- **Make it yours:** Settings → Appearance has presets and many options (glow position/softness/colour, card style/size/transparency/text, indicator style…), with a live preview.
 - Cheap first: shell, files, links and app launching are used before clicking. Destructive shell commands (`rm -r`, `sudo`, uninstall…) need your OK. Max cost per task is capped.
 - Zero-token shortcuts: "open <app>", "onthoud dat …", "vergeet …".
 

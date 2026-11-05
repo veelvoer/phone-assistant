@@ -13,7 +13,9 @@ const DEFAULTS = {
   assistantName: 'Assistant', tone: 'friendly', replyLength: 'short', sounds: true,
   quietOn: false, quietFrom: '22:00', quietTo: '08:00', dailyLimit: 0,
   // overlay look
-  glowOn: true, glowWidth: 2, glowIntensity: 80, glowSpeed: 2, cardPos: 'bottom', cardSize: 'normal', cardOpacity: 92, cardRadius: 28, showBars: true, showProgress: true, autoHide: 5,
+  glowOn: true, glowWidth: 2, glowIntensity: 80, glowSpeed: 2, glowMode: 'full', glowSoft: 50, glowRadius: 46, accent2: '',
+  cardOn: true, cardPos: 'bottom', cardSize: 'normal', cardOpacity: 92, cardRadius: 28, cardStyle: 'solid', cardText: 17, cardOffset: 36, showTitle: true, anim: 'slide',
+  showBars: true, waveStyle: 'bars', waveCount: 4, showProgress: true, autoHide: 5,
 };
 
 class Config {

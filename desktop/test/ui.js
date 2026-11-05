@@ -29,9 +29,9 @@ async function run() {
     page.querySelectorAll('button.tonal').forEach((b) => b.click());
   }
   const keys = m.calls.filter((c) => c[0] === 'cfg:set').flatMap((c) => Object.keys(c[1]));
-  for (const k of ['provider', 'apiKey', 'smartPlan', 'whisperModel', 'lang', 'glowWidth', 'cardPos', 'cardOpacity', 'assistantName', 'tone', 'quietOn', 'facts', 'balance', 'dailyLimit']) assert.ok(keys.includes(k), 'setting saved: ' + k);
+  for (const k of ['provider', 'apiKey', 'smartPlan', 'whisperModel', 'lang', 'glowWidth', 'glowMode', 'glowSoft', 'cardPos', 'cardStyle', 'cardText', 'anim', 'waveStyle', 'cardOpacity', 'assistantName', 'tone', 'quietOn', 'facts', 'balance', 'dailyLimit']) assert.ok(keys.includes(k), 'setting saved: ' + k);
   const stt = m.calls.filter((c) => c[0] === 'cfg:set' && 'whisperModel' in c[1]).map((c) => c[1].whisperModel); assert.ok(stt.includes('low') && stt.includes('medium') && stt.includes('high'), 'three STT levels: ' + stt);
-  assert.ok(m.calls.some((c) => c[0] === 'ui:preview'), 'preview button');
+  assert.ok(m.calls.some((c) => c[0] === 'ui:preview'), 'preview button'); assert.ok(m.calls.some((c) => c[0] === 'look:preset'), 'look presets'); assert.ok(m.calls.some((c) => c[0] === 'look:reset'), 'reset look');
   // events from the main process
   m.emit('update', { version: '2.0.0', url: 'https://github.com/veelvoer/x', notes: 'n', canInstall: true }); m.emit('update:state', { phase: 'downloading', pct: 0.5 }); m.emit('plan', { todos: [{ text: 'a', status: 'doing' }] }); m.emit('status', { running: true, voice: false }); m.emit('usage', { today: 1, left: null, task: { calls: 0 } }); m.emit('stt', { progress: 0.4 }); m.emit('facts');
   assert.strictEqual(d.getElementById('updB').disabled, true); d.querySelector('.navi[data-id=home]').click();
@@ -50,12 +50,24 @@ async function run() {
   c.d.getElementById('input').value = 'doe iets'; c.d.getElementById('form').dispatchEvent(new c.w.Event('submit', { cancelable: true })); assert.ok(c.calls.some((x) => x[0] === 'ui:run' && x[1] === 'doe iets'));
   assert.deepStrictEqual(c.errors, [], 'no script errors in the card');
 
-  // ---- board (whiteboard) ----
-  const { sanitizeSvg } = require('../src/svg'); const b = await load('board.html');
-  b.emit('board', { title: 'DNS', frames: [{ svg: sanitizeSvg('<svg viewBox="0 0 800 500"><rect width="100" height="50" fill="#ccc"/><text x="5" y="30">hi</text></svg>'), caption: 'Step one' }, { svg: sanitizeSvg('<svg viewBox="0 0 800 500"><circle r="20" cx="50" cy="50"/></svg>'), caption: 'Step two' }] });
-  assert.ok(b.d.querySelector('#stage svg rect') && b.d.getElementById('cap').textContent === 'Step one'); b.d.getElementById('next').click(); assert.ok(b.d.querySelector('#stage svg circle') && b.d.getElementById('count').textContent === '2 / 2');
-  b.d.dispatchEvent(new b.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); assert.ok(b.calls.some((x) => x[0] === 'send' && x[1] === 'board:close'));
-  assert.deepStrictEqual(b.errors, [], 'no script errors in the board');
+  // ---- drawing on the screen (fx window) ----
+  const { sanitizeSvg } = require('../src/svg'); const f = await load('fx.html', {});
+  f.w.SVGElement.prototype.getTotalLength = function () { return 100; }; f.w.SVGElement.prototype.getPointAtLength = function (l) { return { x: l, y: l }; }; f.w.SVGElement.prototype.getScreenCTM = function () { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; };
+  f.w.SVGSVGElement.prototype.createSVGPoint = function () { return { x: 0, y: 0, matrixTransform() { return { x: 10, y: 20 }; } }; }; f.w.SVGElement.prototype.getBBox = function () { return { x: 0, y: 0, width: 50, height: 20 }; };
+  f.emit('draw', { title: 'DNS', frames: [{ svg: sanitizeSvg('<svg viewBox="0 0 800 500"><rect x="10" y="10" width="100" height="50" fill="#222" stroke="#000"/><line x1="0" y1="0" x2="50" y2="50" stroke="#fff" marker-end="url(#a)"/><text x="5" y="30" fill="#000">Hallo</text></svg>'), caption: 'Stap een' }, { svg: sanitizeSvg('<svg viewBox="0 0 800 500"><circle r="20" cx="50" cy="50" fill="#e53935"/></svg>'), caption: 'Stap twee' }] });
+  const fxs = f.w.__fx; assert.ok(f.d.getElementById('draw').classList.contains('on'), 'drawing layer is on'); assert.strictEqual(f.d.getElementById('dtitle').textContent, 'DNS');
+  const rect = f.d.querySelector('#sv rect'); assert.strictEqual(rect.style.strokeDashoffset, '100', 'strokes start undrawn');
+  fxs.D.t0 = f.w.performance.now() - 600; fxs.tick(f.w.performance.now()); assert.ok(Number(rect.style.strokeDashoffset) < 100, 'stroke is being drawn');
+  fxs.D.t0 = f.w.performance.now() - (fxs.D.total + 50); fxs.tick(f.w.performance.now());
+  assert.strictEqual(rect.style.strokeDashoffset, '0'); assert.strictEqual(f.d.querySelector('#sv text').textContent, 'Hallo'); assert.strictEqual(f.d.getElementById('dcap').style.opacity, '1');
+  assert.notStrictEqual(rect.getAttribute('stroke'), '#000', 'dark colours are lifted for the dimmed screen'); assert.ok(f.d.querySelector('#sv line').getAttribute('marker-end'), 'arrowhead appears when the line is done');
+  assert.ok(f.calls.some((x) => x[0] === 'send' && x[1] === 'draw:status' && x[2] && x[2].n === 2));
+  f.emit('draw:ctl', 'next'); assert.ok(f.d.querySelector('#sv circle'), 'next frame'); f.emit('draw:ctl', 'close'); assert.ok(!f.d.getElementById('draw').classList.contains('on'));
+  assert.deepStrictEqual(f.errors, [], 'no script errors in the fx window');
+  // card: drawing controls + styles
+  const c2 = await load('card.html'); c2.emit('draw:status', { i: 0, n: 3 }); assert.strictEqual(c2.d.getElementById('dctl').hidden, false); c2.d.getElementById('dnext').click(); assert.ok(c2.calls.some((x) => x[1] === 'draw:ctl' && x[2] === 'next'));
+  c2.emit('state', { mode: 'working', title: 't', text: 'x', sub: '', progress: 0, style: { cardStyle: 'outline', showTitle: false, anim: 'pop', waveStyle: 'ring', waveCount: 6, cardText: 20 } }); assert.ok(c2.d.body.classList.contains('cs-outline') && c2.d.body.classList.contains('notitle') && c2.d.body.classList.contains('a-pop'));
+  assert.deepStrictEqual(c2.errors, [], 'no script errors in the card (styles)');
   console.log('ui tests passed');
 }
 module.exports = { run };

@@ -32,7 +32,6 @@ async function installHyprRules() {
   const common = 'float=true, pin=true, no_anim=true, no_shadow=true, border_size=0, rounding=0, no_blur=true';
   const lua = `
     hl.window_rule({ name = "assistant-card", match = { title = "^Assistant Card$" }, ${common} })
-    hl.window_rule({ name = "assistant-board", match = { title = "^Assistant Board$" }, float = true, center = true })
     hl.window_rule({ name = "assistant-fx", match = { title = "^Assistant FX$" }, ${common}, no_focus = true })
     return 1`;
   const r = await run('hyprctl', ['eval', lua]);
@@ -71,12 +70,22 @@ function createMain() {
 async function focusedMonitor() { try { const m = await platform.monitor(); return { x: m.x, y: m.y, w: Math.round(m.lw), h: Math.round(m.lh) }; } catch { const d = screen.getPrimaryDisplay(); return { x: d.bounds.x, y: d.bounds.y, w: d.bounds.width, h: d.bounds.height }; } }
 
 const CARD_W = { compact: 460, normal: 600, large: 760 };
-const cardGeo = (m, h) => { const w = CARD_W[config.get('cardSize')] || 600; return { width: w, height: h, x: m.x + Math.round((m.w - w) / 2), y: config.get('cardPos') === 'top' ? m.y + 36 : m.y + m.h - h - 36 }; };
-const overlayStyle = () => ({ glowOn: config.get('glowOn') !== false, glowWidth: +config.get('glowWidth') || 2, glowIntensity: config.get('glowIntensity') == null ? 80 : +config.get('glowIntensity'), glowSpeed: +config.get('glowSpeed') || 2, cardOpacity: +config.get('cardOpacity') || 92, cardRadius: +config.get('cardRadius') || 28, showBars: config.get('showBars') !== false, showProgress: config.get('showProgress') !== false, cardPos: config.get('cardPos') || 'bottom' });
+const cardGeo = (m, h) => { const w = CARD_W[config.get('cardSize')] || 600; return { width: w, height: h, x: m.x + Math.round((m.w - w) / 2), y: config.get('cardPos') === 'top' ? m.y + Number(config.get('cardOffset') || 36) : m.y + m.h - h - Number(config.get('cardOffset') || 36) }; };
+const overlayStyle = () => { const c = (k, d) => (config.get(k) == null ? d : config.get(k)); return { glowOn: c('glowOn', true) !== false, glowWidth: +c('glowWidth', 2), glowIntensity: +c('glowIntensity', 80), glowSpeed: +c('glowSpeed', 2), glowMode: c('glowMode', 'full'), glowSoft: +c('glowSoft', 50), glowRadius: +c('glowRadius', 46), accent: config.get('accent') || '', accent2: config.get('accent2') || '', cardOpacity: +c('cardOpacity', 92), cardRadius: +c('cardRadius', 28), cardStyle: c('cardStyle', 'solid'), cardText: +c('cardText', 17), showTitle: c('showTitle', true) !== false, anim: c('anim', 'slide'), showBars: c('showBars', true) !== false, waveStyle: c('waveStyle', 'bars'), waveCount: +c('waveCount', 4), showProgress: c('showProgress', true) !== false, cardPos: c('cardPos', 'bottom'), hold: +c('autoHide', 5), cardOn: c('cardOn', true) !== false }; };
 const holdMs = () => Math.max(2, Math.min(20, Number(config.get('autoHide')) || 5)) * 1000;
 const isQuiet = () => { if (!config.get('quietOn')) return false; const mm = (t) => { const [h, m] = String(t).split(':').map(Number); return (h || 0) * 60 + (m || 0); }; const now = new Date(); const cur = now.getHours() * 60 + now.getMinutes(), a = mm(config.get('quietFrom')), b = mm(config.get('quietTo')); return a <= b ? cur >= a && cur < b : cur >= a || cur < b; };
+const BASE_LOOK = { glowOn: true, glowWidth: 2, glowIntensity: 80, glowSpeed: 2, glowMode: 'full', glowSoft: 50, glowRadius: 46, accent: '', accent2: '', cardOn: true, cardPos: 'bottom', cardSize: 'normal', cardOpacity: 92, cardRadius: 28, cardStyle: 'solid', cardText: 17, cardOffset: 36, showTitle: true, anim: 'slide', showBars: true, waveStyle: 'bars', waveCount: 4, showProgress: true, autoHide: 5 };
+const LOOK_DEFAULTS = () => ({ ...BASE_LOOK });
+const PRESETS = {
+  classic: { ...BASE_LOOK }, minimal: { ...BASE_LOOK, glowOn: false, cardStyle: 'outline', cardOpacity: 70, cardRadius: 20, cardSize: 'compact', showBars: false, showProgress: false, anim: 'fade' },
+  neon: { ...BASE_LOOK, glowWidth: 3, glowIntensity: 130, glowSpeed: 3, glowSoft: 30, accent: '#00e5ff', accent2: '#ff2bd6', cardStyle: 'tinted', cardOpacity: 88, cardRadius: 22, waveStyle: 'ring' },
+  calm: { ...BASE_LOOK, glowWidth: 1, glowIntensity: 50, glowSpeed: 1, glowSoft: 90, accent: '#8fb8de', cardOpacity: 85, cardRadius: 34, anim: 'fade', waveStyle: 'dots' },
+  glass: { ...BASE_LOOK, glowWidth: 1, glowIntensity: 60, cardOpacity: 55, cardRadius: 36 }, contrast: { ...BASE_LOOK, glowWidth: 3, glowIntensity: 110, accent: '#ffd600', cardOpacity: 100, cardRadius: 14, cardText: 20 },
+  bottom: { ...BASE_LOOK, glowMode: 'bottom', glowIntensity: 90 },
+};
 const chime = (kind) => { if (config.get('sounds') && !isQuiet()) micCmd({ cmd: 'chime', kind }); };
 async function showCard(focus) {
+  if (config.get('cardOn') === false && !S.asking && !focus && !S.drawing) { if (win(cardWin)) cardWin.hide(); return; }
   const m = await focusedMonitor(); const g0 = cardGeo(m, S.cardH || 190); const w = g0.width, h = g0.height;
   if (!win(cardWin)) {
     cardWin = new BrowserWindow({ width: w, height: h, x: g0.x, y: g0.y, title: 'Assistant Card', frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false, focusable: true, backgroundColor: '#00000000', webPreferences: baseWebPrefs() });
@@ -88,8 +97,8 @@ async function showCard(focus) {
   S.cardVisible = true; pushState();
 }
 
-async function showFx() {
-  if (!config.get('overlay')) return;
+async function showFx(force) {
+  if (!config.get('overlay') && !force) return;
   const m = await focusedMonitor();
   if (!win(fxWin)) {
     fxWin = new BrowserWindow({ x: m.x, y: m.y, width: m.w, height: m.h, title: 'Assistant FX', frame: false, transparent: true, resizable: false, movable: false, alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false, focusable: false, backgroundColor: '#00000000', webPreferences: baseWebPrefs() });
@@ -100,17 +109,7 @@ async function showFx() {
   fxWin.showInactive(); pushState();
 }
 
-let boardWin = null;
-async function showBoard(d) {
-  const m = await focusedMonitor(); const w = Math.min(980, m.w - 80), h = Math.min(700, m.h - 100);
-  if (!win(boardWin)) {
-    boardWin = new BrowserWindow({ width: w, height: h, x: m.x + Math.round((m.w - w) / 2), y: m.y + Math.round((m.h - h) / 2), title: 'Assistant Board', frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false, backgroundColor: '#00000000', webPreferences: baseWebPrefs() });
-    await boardWin.loadFile(path.join(__dirname, 'renderer', 'board.html')); boardWin.on('closed', () => { boardWin = null; });
-  }
-  boardWin.show(); boardWin.focus(); send(boardWin, 'board', d);
-}
-
-function hideOverlay() { if (win(cardWin)) cardWin.hide(); if (win(fxWin)) fxWin.hide(); S.cardVisible = false; }
+function hideOverlay() { if (S.drawing) return; if (win(cardWin)) cardWin.hide(); if (win(fxWin)) fxWin.hide(); S.cardVisible = false; }
 
 let audioReady = Promise.resolve();
 function createAudio() {
@@ -127,6 +126,7 @@ function overlayState() {
   const fresh = Date.now() < S.resultUntil; const running = agent && agent.running;
   let o;
   if (S.previewUntil > Date.now() && !running && !S.voice && !S.asking) o = { mode: 'working', title: 'Preview', text: 'This is how I look and sound', sub: '2/4 · Customize me', progress: 0.5 };
+  else if (S.drawing && !running && !S.asking) o = { mode: 'info', title: 'Drawing', text: S.result || 'Drawing for you', sub: '', progress: 0 };
   else if (S.asking) o = { mode: 'asking', title: 'Question', text: S.asking, sub: S.partial || (S.voice ? 'Say your answer…' : 'Type your answer'), progress: 0 };
   else if (running) o = { mode: 'working', title: S.voice ? 'Working · listening' : 'Working', text: S.status || 'Thinking…', sub: S.partial ? '🎤 ' + S.partial : sub, progress: prog };
   else if (S.voice) o = { mode: 'listening', title: fresh ? 'Done' : 'Listening', text: fresh ? S.result : S.sttReady || config.get('whisperModel') ? (S.partial || 'Say what I should do…') : '', sub: S.sttProgress >= 0 && S.sttProgress < 1 ? `Loading speech model… ${Math.round(S.sttProgress * 100)}%` : fresh ? 'Listening for your next command' : '', progress: 0 };
@@ -194,7 +194,7 @@ function registerIpc() {
     if ('hotkey' in patch) { registerHotkey(); if (isHypr() && patch.hotkey) { const r = await bindHypr(patch.hotkey); if (r !== 'ok') broadcast('toast', 'Could not bind in Hyprland: ' + r); } }
     if ('balance' in patch) usage.setBalance(patch.balance);
     if ('whisperModel' in patch || 'lang' in patch) { if (stt.worker) { stt.stop(); } }
-    if (['cardPos', 'cardSize', 'cardOpacity', 'cardRadius', 'showBars', 'showProgress', 'glowOn', 'glowWidth', 'glowIntensity', 'glowSpeed', 'overlay'].some((k) => k in patch)) { S.previewUntil = Date.now() + 4500; await showCard(false); if (config.get('overlay')) await showFx(); pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }
+    if (['cardPos', 'cardSize', 'cardOpacity', 'cardRadius', 'showBars', 'showProgress', 'glowOn', 'glowWidth', 'glowIntensity', 'glowSpeed', 'overlay', 'glowMode', 'glowSoft', 'glowRadius', 'accent2', 'cardOn', 'cardStyle', 'cardText', 'cardOffset', 'showTitle', 'anim', 'waveStyle', 'waveCount', 'accent'].some((k) => k in patch)) { S.previewUntil = Date.now() + 4500; await showCard(false); if (config.get('overlay')) await showFx(); pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }
     broadcast('usage', usage.summary()); return true;
   });
   ipcMain.handle('ui:run', (_e, text) => { handleText(String(text), false); return true; });
@@ -211,7 +211,10 @@ function registerIpc() {
   ipcMain.on('audio:level', (_e, v) => { if (!S.loggedLevel && v >= 0) { S.loggedLevel = true; console.log('[assistant] mic level events flowing'); } S.micLevel = v; if (S.voice) send(cardWin, 'level', v); send(fxWin, 'level', v); });
   ipcMain.on('audio:error', (_e, m) => { log('Microphone: ' + m); S.partial = ''; broadcast('toast', 'Microphone: ' + m); });
   ipcMain.on('card:height', async (_e, h) => { if (win(cardWin)) { const m = await focusedMonitor(); S.cardH = Math.round(h); cardWin.setBounds(cardGeo(m, S.cardH)); } });
-  ipcMain.on('board:close', () => { if (win(boardWin)) boardWin.close(); });
+  ipcMain.on('draw:status', (_e, d) => { S.drawing = !!d; send(cardWin, 'draw:status', d); pushState(); });
+  ipcMain.on('draw:ctl', (_e, c) => send(fxWin, 'draw:ctl', c));
+  ipcMain.handle('look:preset', (_e, name) => { config.set(PRESETS[name] || {}); S.previewUntil = Date.now() + 4500; showCard(false).then(() => showFx()).then(() => { pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }); return config.all(); });
+  ipcMain.handle('look:reset', () => { config.set(LOOK_DEFAULTS()); S.previewUntil = Date.now() + 4500; showCard(false).then(() => showFx()).then(() => pushState()); return config.all(); });
   ipcMain.handle('ui:preview', () => { S.previewUntil = Date.now() + 4500; showCard(false).then(() => (config.get('overlay') ? showFx() : null)).then(() => { pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }); return true; });
   ipcMain.on('card:close', () => { S.cardVisible = false; endVoice(false); hideOverlay(); });
   ipcMain.on('win:main', () => { if (win(mainWin)) { mainWin.show(); mainWin.focus(); } });
@@ -272,7 +275,7 @@ app.whenReady().then(async () => {
   agent.on('usage', (u) => broadcast('usage', u));
   agent.on('asking', async (q) => { S.asking = q; if (!S.cardVisible) await showCard(true); await showFx(); if (!S.voice) startVoice(true); pushState(); });
   agent.on('result', (m) => { S.result = m; S.resultUntil = Date.now() + holdMs(); pushState(); setTimeout(pushState, holdMs() + 200); chime(/^(Error|Gestopt|Stopped)/i.test(m) ? 'error' : 'done'); });
-  agent.on('draw', (d) => showBoard(d));
+  agent.on('draw', async (d) => { S.drawing = true; await showFx(true); await showCard(false); send(fxWin, 'draw', { title: d.title, frames: d.frames }); });
   agent.on('highlight', (d) => { const b = win(fxWin) ? fxWin.getBounds() : { x: 0, y: 0 }; send(fxWin, 'highlight', { seconds: d.seconds, items: d.items.map((i) => ({ ...i, x: i.x - b.x, y: i.y - b.y })) }); });
   agent.on('facts', () => send(mainWin, 'facts', config.facts()));
   agent.on('end', () => { S.asking = ''; S.status = ''; send(mainWin, 'plan', agent.state); pushState(); setTimeout(pushState, holdMs() + 200); if (!S.voice && !S.keepCard) setTimeout(() => { if (!agent.running && !S.voice && !(S.previewUntil > Date.now())) hideOverlay(); }, holdMs() + 400); });

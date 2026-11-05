@@ -3,7 +3,7 @@ const money = (x) => (x < 0.01 ? '$' + x.toFixed(4) : '$' + x.toFixed(2)); const
 const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 const toast = (m) => { const t = $('toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => { t.style.display = 'none'; }, 3500); };
 const set = (patch) => { Object.assign(cfg, patch); return A.invoke('cfg:set', patch); };
-const OVERLAY_KEYS = ['cardPos', 'cardSize', 'cardOpacity', 'cardRadius', 'showBars', 'showProgress', 'glowOn', 'glowWidth', 'glowIntensity', 'glowSpeed', 'overlay', 'accent'];
+const OVERLAY_KEYS = ['glowMode', 'cardOn', 'cardStyle', 'cardText', 'cardOffset', 'showTitle', 'anim', 'waveStyle', 'waveCount', 'cardPos', 'cardSize', 'cardOpacity', 'cardRadius', 'showBars', 'showProgress', 'glowOn', 'glowWidth', 'glowIntensity', 'glowSpeed', 'overlay', 'accent'];
 
 // ---------------- settings schema ----------------
 const SWATCHES = ['#7aa2f7', '#4f6bed', '#8b5cf6', '#d946ef', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#06b6d4'];
@@ -37,22 +37,35 @@ const SECTIONS = [
     ] } ] },
   { id: 'shortcut', title: 'Shortcut', icon: 'keyboard', sub: 'The keys that wake the assistant.', groups: [{ title: '', items: [{ type: 'hotkey' }] }] },
   { id: 'look', title: 'Appearance', icon: 'palette', sub: 'Make the overlay yours. Changes show a live preview.', groups: [
-    { title: 'Colour', items: [{ type: 'swatches', key: 'accent', title: 'Accent colour', sub: () => `Following your system (${D.theme.source}) unless you pick one.` }] },
-    { title: 'Screen glow', items: [
+    { title: 'Looks', items: [{ type: 'presets' }] },
+    { title: 'Colour', items: [{ type: 'swatches', key: 'accent', title: 'Accent colour', sub: () => `Following your system (${D.theme.source}) unless you pick one.`, rerender: true }, { type: 'swatches', key: 'accent2', title: 'Second colour (optional)', none: true, show: (c) => !!c.accent }] },
+    { title: 'Screen glow & drawing', items: [
       { type: 'toggle', key: 'overlay', title: 'Screen overlay', sub: 'The glowing edge and highlight spotlight', rerender: true },
       { type: 'toggle', key: 'glowOn', title: 'Glowing edge', show: (c) => c.overlay !== false, rerender: true },
+      { type: 'seg', key: 'glowMode', title: 'Where', options: [['full', 'Full edge'], ['bottom', 'Bottom'], ['top', 'Top'], ['sides', 'Sides']], show: (c) => c.overlay !== false && c.glowOn !== false },
       { type: 'seg', key: 'glowWidth', title: 'Thickness', num: true, options: [[1, 'Thin'], [2, 'Normal'], [3, 'Bold']], show: (c) => c.overlay !== false && c.glowOn !== false },
       { type: 'range', key: 'glowIntensity', title: 'Brightness', min: 20, max: 140, step: 5, unit: '%', show: (c) => c.overlay !== false && c.glowOn !== false },
+      { type: 'range', key: 'glowSoft', title: 'Softness', min: 0, max: 100, step: 5, unit: '%', sub: 'Crisp line … soft haze', show: (c) => c.overlay !== false && c.glowOn !== false },
+      { type: 'range', key: 'glowRadius', title: 'Corner radius of the glow', min: 0, max: 80, step: 2, unit: ' px', show: (c) => c.overlay !== false && c.glowOn !== false },
       { type: 'seg', key: 'glowSpeed', title: 'Animation speed', num: true, options: [[1, 'Calm'], [2, 'Normal'], [3, 'Lively']], show: (c) => c.overlay !== false && c.glowOn !== false },
     ] },
     { title: 'Card', items: [
-      { type: 'seg', key: 'cardPos', title: 'Position', options: [['bottom', 'Bottom'], ['top', 'Top']] },
-      { type: 'seg', key: 'cardSize', title: 'Size', options: [['compact', 'Compact'], ['normal', 'Normal'], ['large', 'Large']] },
-      { type: 'range', key: 'cardOpacity', title: 'Transparency', min: 55, max: 100, step: 1, unit: '%', sub: 'Lower = see-through' },
-      { type: 'range', key: 'cardRadius', title: 'Corner roundness', min: 8, max: 40, step: 1, unit: ' px' },
-      { type: 'toggle', key: 'showBars', title: 'Voice bars' }, { type: 'toggle', key: 'showProgress', title: 'Plan progress bar' },
+      { type: 'toggle', key: 'cardOn', title: 'Show the card', sub: 'Turn it off to keep only the glow', rerender: true },
+      { type: 'seg', key: 'cardPos', title: 'Position', options: [['bottom', 'Bottom'], ['top', 'Top']], show: (c) => c.cardOn !== false },
+      { type: 'seg', key: 'cardSize', title: 'Size', options: [['compact', 'Compact'], ['normal', 'Normal'], ['large', 'Large']], show: (c) => c.cardOn !== false },
+      { type: 'seg', key: 'cardStyle', title: 'Style', options: [['solid', 'Solid'], ['outline', 'Outline'], ['tinted', 'Tinted']], show: (c) => c.cardOn !== false },
+      { type: 'range', key: 'cardOpacity', title: 'Transparency', min: 40, max: 100, step: 1, unit: '%', sub: 'Lower = see-through', show: (c) => c.cardOn !== false },
+      { type: 'range', key: 'cardRadius', title: 'Corner roundness', min: 6, max: 44, step: 1, unit: ' px', show: (c) => c.cardOn !== false },
+      { type: 'range', key: 'cardText', title: 'Text size', min: 13, max: 24, step: 1, unit: ' px', show: (c) => c.cardOn !== false },
+      { type: 'range', key: 'cardOffset', title: 'Distance from the edge', min: 8, max: 200, step: 2, unit: ' px', show: (c) => c.cardOn !== false },
+      { type: 'toggle', key: 'showTitle', title: 'Show the title line', show: (c) => c.cardOn !== false },
+      { type: 'seg', key: 'anim', title: 'Appearing', options: [['slide', 'Slide'], ['fade', 'Fade'], ['pop', 'Pop']], show: (c) => c.cardOn !== false },
+      { type: 'toggle', key: 'showBars', title: 'Voice indicator', rerender: true, show: (c) => c.cardOn !== false },
+      { type: 'seg', key: 'waveStyle', title: 'Indicator style', options: [['bars', 'Bars'], ['dots', 'Dots'], ['ring', 'Ring']], show: (c) => c.cardOn !== false && c.showBars !== false },
+      { type: 'range', key: 'waveCount', title: 'Bars / dots', min: 3, max: 7, step: 1, show: (c) => c.cardOn !== false && c.showBars !== false },
+      { type: 'toggle', key: 'showProgress', title: 'Plan progress bar', show: (c) => c.cardOn !== false },
       { type: 'range', key: 'autoHide', title: 'Show results for', min: 2, max: 15, step: 1, unit: ' s' },
-      { type: 'buttons', buttons: [{ label: 'Preview', action: 'preview' }] },
+      { type: 'buttons', buttons: [{ label: 'Preview', action: 'preview' }, { label: 'Reset to default', action: 'resetLook' }] },
     ] } ] },
   { id: 'me', title: 'Personality', icon: 'face', sub: 'Name, tone and how much it says.', groups: [
     { title: 'Character', items: [
@@ -94,10 +107,10 @@ function controlFor(it) {
   }
   if (it.type === 'textarea') { const t = el(`<textarea rows="${it.rows || 3}" placeholder="${esc(it.placeholder || '')}"></textarea>`); t.value = cfg[it.key] || ''; t.dataset.key = it.key; t.onchange = () => commit(t.value.split('\n').map((x) => x.trim()).filter(Boolean).join('\n')); return t; }
   if (it.type === 'swatches') {
-    const w = el('<div class="swatches"></div>'); const sys = el('<div class="sw sys" title="Follow system"></div>'); w.appendChild(sys);
-    const paint = () => { sys.classList.toggle('on', !cfg.accent); w.querySelectorAll('.sw:not(.sys)').forEach((s) => s.classList.toggle('on', s.dataset.c === cfg.accent)); };
+    const w = el('<div class="swatches"></div>'); const sys = el(`<div class="sw sys" title="${it.none ? 'None' : 'Follow system'}"></div>`); if (it.none) sys.style.background = 'transparent', sys.style.border = '3px dashed var(--outline)'; w.appendChild(sys);
+    const paint = () => { sys.classList.toggle('on', !cfg[it.key]); w.querySelectorAll('.sw:not(.sys)').forEach((s) => s.classList.toggle('on', s.dataset.c === cfg[it.key])); };
     sys.onclick = () => { commit(''); paint(); }; for (const c of SWATCHES) { const s = el(`<div class="sw" data-c="${c}" style="background:${c}"></div>`); s.onclick = () => { commit(c); paint(); }; w.appendChild(s); }
-    const custom = el('<input type="color" class="sw" style="padding:0;width:34px;height:34px">'); custom.value = /^#[0-9a-f]{6}$/i.test(cfg.accent || '') ? cfg.accent : '#7aa2f7'; custom.onchange = () => { commit(custom.value); paint(); }; w.appendChild(custom); paint(); return w;
+    const custom = el('<input type="color" class="sw" style="padding:0;width:34px;height:34px">'); custom.value = /^#[0-9a-f]{6}$/i.test(cfg[it.key] || '') ? cfg[it.key] : '#7aa2f7'; custom.onchange = () => { commit(custom.value); paint(); }; w.appendChild(custom); paint(); return w;
   }
   const typ = it.type === 'password' ? 'password' : it.type === 'number' ? 'number' : 'text';
   const i = el(`<input type="${typ}" placeholder="${esc(it.placeholder || '')}">`); i.dataset.key = it.key; if (typ === 'number') { if (it.step) i.step = it.step; if (it.min != null) i.min = it.min; }
@@ -105,12 +118,13 @@ function controlFor(it) {
   i.onchange = () => commit(typ === 'number' ? (i.value === '' ? (it.key === 'balance' ? null : 0) : Number(i.value)) : i.value.trim());
   return i;
 }
-const ACTIONS = { warm: () => { A.invoke('ui:warm-stt'); toast('Downloading the speech model…'); }, testVoice: () => A.invoke('ui:test-voice'), preview: () => A.invoke('ui:preview'), checkUpd: () => A.invoke('update:check') };
+const ACTIONS = { resetLook: async () => { cfg = (await A.invoke('look:reset')); rerender(SECTIONS.find((x) => x.id === 'look')); toast('Appearance reset'); }, warm: () => { A.invoke('ui:warm-stt'); toast('Downloading the speech model…'); }, testVoice: () => A.invoke('ui:test-voice'), preview: () => A.invoke('ui:preview'), checkUpd: () => A.invoke('update:check') };
 function buildItem(it, sec) {
   it.__sec = sec;
   if (it.type === 'buttons') { const w = el('<div class="item"><div class="row"></div></div>'); for (const b of it.buttons) { const x = el(`<button class="tonal" type="button">${esc(b.label)}</button>`); x.onclick = () => ACTIONS[b.action] && ACTIONS[b.action](); w.firstChild.appendChild(x); } return w; }
   if (it.type === 'note') return el(`<div class="item"><p class="hint" id="${it.id || ''}">${esc(it.text)}</p></div>`);
   if (it.type === 'hotkey') return buildHotkey();
+  if (it.type === 'presets') { const w = el('<div class="item"><div class="s">One click, then fine-tune below.</div><div class="chips ctl"></div></div>'); for (const [id, n] of [['classic', 'Classic'], ['minimal', 'Minimal'], ['neon', 'Neon'], ['calm', 'Calm'], ['glass', 'Glass'], ['contrast', 'High contrast'], ['bottom', 'Bottom glow']]) { const c = el(`<span class="chip">${n}</span>`); c.onclick = async () => { cfg = await A.invoke('look:preset', id); rerender(it.__sec); }; w.querySelector('.chips').appendChild(c); } return w; }
   if (it.type === 'times') { const w = el('<div class="item"><div class="tworow"><label class="s">From<input type="time" data-key="quietFrom"></label><label class="s">Until<input type="time" data-key="quietTo"></label></div></div>'); w.querySelectorAll('input').forEach((i) => { i.value = cfg[i.dataset.key] || ''; i.onchange = () => set({ [i.dataset.key]: i.value }); }); return w; }
   if (it.type === 'system') return buildSystem();
   const sub = typeof it.sub === 'function' ? it.sub() : it.sub; const inline = it.type === 'toggle'; const unit = it.unit && it.type === 'number' ? `<span class="s"> (${esc(it.unit)})</span>` : '';
