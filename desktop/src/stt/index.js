@@ -35,7 +35,24 @@ class Stt extends EventEmitter {
     this.worker.send({ type: 'load', model: this.config.get('whisperModel') });
   }
   language() { const l = this.config.get('lang'); return l === 'nl' ? 'dutch' : l === 'en' ? 'english' : undefined; }
+  /** Groq's free hosted Whisper large-v3 (with a vocabulary hint). Returns null when it cannot be used, so the local model takes over. */
+  async cloud(float32) {
+    const key = String(this.config.get('groqKey') || '').trim(); if (!key) return null;
+    try {
+      const n = float32.length, wav = Buffer.alloc(44 + n * 2);
+      wav.write('RIFF', 0); wav.writeUInt32LE(36 + n * 2, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(n * 2, 40);
+      for (let i = 0; i < n; i++) wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, float32[i])) * 32767), 44 + i * 2);
+      const form = new FormData(); form.append('file', new Blob([wav], { type: 'audio/wav' }), 'speech.wav'); form.append('model', 'whisper-large-v3'); form.append('temperature', '0'); form.append('response_format', 'json');
+      const l = this.config.get('lang'); if (l === 'nl' || l === 'en') form.append('language', l);
+      const vocab = [...(this.config.names ? this.config.names() : []), ...TERMS].slice(0, 60).join(', ');
+      form.append('prompt', (l === 'en' ? 'Computer commands. ' : 'Computeropdrachten in het Nederlands, met Engelse woorden. ') + vocab + '.');
+      const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form, signal: AbortSignal.timeout(20000) });
+      if (!r.ok) { this.emit('error', new Error('online speech recognition: HTTP ' + r.status + (r.status === 429 ? ' (free limit reached, using the local model)' : ''))); return null; }
+      return String((await r.json()).text || '').trim();
+    } catch (e) { this.emit('error', new Error('online speech recognition: ' + e.message)); return null; }
+  }
   async transcribe(float32) {
+    const online = await this.cloud(float32); if (online !== null) return online;
     if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) await this.prepare();
     this.start(); this.touch();
     return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.send({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: process.env.STT_LANG === 'auto' ? undefined : this.language() }); });

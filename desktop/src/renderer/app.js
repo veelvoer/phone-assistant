@@ -27,6 +27,7 @@ const SECTIONS = [
     { title: 'Speech recognition', items: [
       { type: 'seg', key: 'lang', title: 'Language', options: [['nl', 'Nederlands'], ['en', 'English'], ['auto', 'Auto']] },
       { type: 'seg', key: 'whisperModel', title: 'Recognition quality', sub: 'Runs on this computer. In my Dutch test the word error rate was about 48% (Low), 14–24% (Medium) and 6% (High).', norm: (v) => ({ base: 'low', small: 'medium' }[v] || v), options: [['low', 'Low', 'Base · 80 MB · fast'], ['medium', 'Medium', 'Small · 240 MB · okay'], ['high', 'High', 'Large-v3 Turbo · 760 MB · best']] },
+      { type: 'password', key: 'groqKey', title: 'Online speech recognition (optional, free)', placeholder: 'gsk_…', note: 'Much more accurate, especially with English words. Free key at console.groq.com (no card; free use is rate-limited). Your recordings are then sent to Groq. Leave empty to stay fully on this computer.' },
       { type: 'buttons', buttons: [{ label: 'Test speech', action: 'testStt' }, { label: 'Download speech model now', action: 'warm' }] },
       { type: 'note', id: 'sttTest', text: 'Press “Test speech”, say something (mix in English words if you like) and see what the computer heard.' },
       { type: 'note', id: 'sttInfo', text: 'The speech model downloads once, the first time you use voice.' },

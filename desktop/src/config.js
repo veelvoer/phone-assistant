@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const DEFAULTS = {
-  provider: 'claude', apiKey: '', model: 'claude-haiku-5-5', smartPlan: true,
+  provider: 'claude', apiKey: '', groqKey: '', model: 'claude-haiku-5-5', smartPlan: true,
   hearthUrl: '', hearthKey: '', hearthModel: 'haiku',
   lang: 'nl', speak: true, loud: 1, voiceName: '', ttsVolume: 100, ttsSpeed: 100, whisperModel: 'medium', sttMigrated: 0,
   facts: '', lessons: '', names: '', aliases: '',
