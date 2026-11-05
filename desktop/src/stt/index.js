@@ -38,15 +38,19 @@ class Stt extends EventEmitter {
   async transcribe(float32) {
     if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) await this.prepare();
     this.start(); this.touch();
-    return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.send({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: this.language() }); });
+    return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.send({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: process.env.STT_LANG === 'auto' ? undefined : this.language() }); });
   }
   stop() { clearTimeout(this.idle); if (this.worker) { const w = this.worker; this.worker = null; this.ready = false; w.kill(); } }
 }
 
 // replace words that are almost a known name ("Yan" -> "Jan")
 function lev(a, b) { const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j++) d[0][j] = j; for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; }
+// English words and app names that Dutch-mode recognition turns into nonsense
+const TERMS = ['Firefox', 'Chrome', 'Chromium', 'Spotify', 'Discord', 'Telegram', 'WhatsApp', 'Snapchat', 'Instagram', 'YouTube', 'Gmail', 'GitHub', 'Steam', 'Terminal', 'Workspace', 'Screenshot', 'Browser', 'Download', 'Downloads', 'Settings', 'Bluetooth', 'WiFi', 'Hyprland', 'Linux', 'Windows', 'Visual Studio Code', 'Claude', 'Smartschool', 'Google', 'Netflix', 'Twitch', 'Reddit', 'Wikipedia', 'Outlook', 'Notepad', 'Calculator', 'Slack', 'Zoom', 'Teams', 'Tab', 'Desktop', 'Folder', 'Password', 'Update', 'Shortcut', 'Dark mode', 'Fullscreen'];
+const ALIASES = [[/\bfire\W*works?\b/gi, 'Firefox'], [/\bfire\W*fox\b/gi, 'Firefox'], [/\bwork\W*space\b/gi, 'workspace'], [/\bscreen\W*shot\b/gi, 'screenshot'], [/\bspot\W*if(y|ie)\b/gi, 'Spotify'], [/\bwhats\W*app\b/gi, 'WhatsApp'], [/\bsnap\W*chat\b/gi, 'Snapchat'], [/\bgit\W*hub\b/gi, 'GitHub'], [/\bhyper\W*land\b/gi, 'Hyprland'], [/\byou\W*tube\b/gi, 'YouTube'], [/\bwi\W*fi\b/gi, 'wifi']];
 function fixNames(text, names) {
-  const known = names.filter((n) => n.length >= 3);
-  return text.replace(/[\p{L}'-]+/gu, (w) => { const lw = w.toLowerCase(); if (lw.length < 3) return w; for (const n of known) { const ln = n.toLowerCase(); if (ln === lw) return n; const max = ln.length >= 7 ? 2 : ln.length >= 4 ? 1 : 0; if (max && Math.abs(ln.length - lw.length) <= max && lev(ln, lw) <= max) return n; } return w; });
+  const known = [...names, ...TERMS.filter((n) => n.length >= 7)].filter((n) => n.length >= 3);   // short built-in words only match exactly (aliases below)
+  let t = text; for (const [re, to] of ALIASES) t = t.replace(re, to);
+  return t.replace(/[\p{L}'-]+/gu, (w) => { const lw = w.toLowerCase(); if (lw.length < 3) return w; for (const n of known) { const ln = n.toLowerCase(); if (ln === lw) return n; const max = ln.length >= 7 ? 2 : ln.length >= 4 ? 1 : 0; if (max && Math.abs(ln.length - lw.length) <= max && lev(ln, lw) <= max) return n; } return w; });
 }
 module.exports = { Stt, fixNames };
