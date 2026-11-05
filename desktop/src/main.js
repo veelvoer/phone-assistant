@@ -168,8 +168,8 @@ function speak(t) {
 
 const HALLUCINATIONS = /^(ondertitel|ondertiteld|vertaling|bedankt voor het kijken|thanks for watching|subtitles by|untertitel|amara\.org|\.+|ja\.?|you\.?|oké\.?)/i;
 async function onUtterance(buf) {
-  if (S.speaking) return;
   const testing = S.sttTest;
+  if (S.speaking || (!S.voice && !testing)) return;   // a late utterance after the session ended must not start anything (it made the card pop up by itself)
   try {
     const f32 = new Float32Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf);
     try { fs.writeFileSync(path.join(app.getPath('userData'), 'last-utterance.f32'), Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength)); } catch { /* diagnostics only */ }   // lets recognition problems be reproduced offline

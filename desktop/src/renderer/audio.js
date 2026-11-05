@@ -22,7 +22,7 @@ function handle(raw) {
   }
   buf.push(chunk); if (rms > off) { silenceMs = 0; speechMs += ms; } else silenceMs += ms;
   const total = buf.reduce((a, c) => a + c.length, 0) / TARGET;
-  if (silenceMs > 900 || total > 28) {
+  if (silenceMs > 1100 || total > 28) {
     speaking = false; onFrames = 0;
     if (speechMs > 350) { const u = join(buf); window.api.send('audio:utterance', u.buffer); }
     buf = []; pre = [];
