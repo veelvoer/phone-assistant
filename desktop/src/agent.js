@@ -177,6 +177,7 @@ class Agent extends EventEmitter {
       const facts = this.config.facts(), names = this.config.names(), aliases = this.config.aliases();
       const lessons = this.config.lessons();
       const head = (lessons.length ? `Lessons from earlier corrections by the user (ALWAYS follow them):\n${lessons.join('\n')}\n\n` : '') + (facts.length ? `About the user (saved memory; use it to resolve "my mom", "me", etc.):\n${facts.join('\n')}\n\n` : '')
+        + 'Spoken requests come from imperfect speech recognition: the user mixes Dutch with English words, so a garbled word is often an English/Dutch term, app or name; interpret it by sound and context, and only ask when it is truly ambiguous.\n'
         + (names.length ? `Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): ${names.join(', ')}${aliases.length ? '\nLearned corrections (heard=actual): ' + aliases.join('; ') : ''}\n\n` : '')
         + (this.notes.length ? `Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n${this.notes.join('\n')}\n\n` : '');
       const firstText = head + `Task: ${taskText}` + (turns.length === 0 ? `\n\n${winLine}\n(First call the plan tool.)` : '');

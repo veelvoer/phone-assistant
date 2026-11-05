@@ -172,6 +172,7 @@ async function onUtterance(buf) {
   const testing = S.sttTest;
   try {
     const f32 = new Float32Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf);
+    try { fs.writeFileSync(path.join(app.getPath('userData'), 'last-utterance.f32'), Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength)); } catch { /* diagnostics only */ }   // lets recognition problems be reproduced offline
     if (testing) { const t0 = Date.now(); try { testing({ text: (await stt.transcribe(f32)).trim(), ms: Date.now() - t0 }); } catch (e) { testing({ error: e.message }); } return; }
     S.partial = '…'; pushState();
     let text = await stt.transcribe(f32); S.partial = '';
