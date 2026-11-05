@@ -44,7 +44,7 @@ class ServiceTest {
     }
 
     @Test fun callSessionStartsAndEnds() {
-        service(); RuntimeEnvironment.getApplication().getSharedPreferences("p", Context.MODE_PRIVATE).edit().putString("key", "sk-test").commit()
+        service(); shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
         CallManager.testSession(RuntimeEnvironment.getApplication()); shadowOf(android.os.Looper.getMainLooper()).idle()
         assertTrue(CallManager.sessionActive()); CallManager.endSession("test"); shadowOf(android.os.Looper.getMainLooper()).idle()
         assertFalse(CallManager.sessionActive())
