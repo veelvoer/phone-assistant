@@ -7,7 +7,7 @@ async function load(file, apiExtra = {}) {
   const errors = []; const vc = new VirtualConsole(); vc.on('jsdomError', (e) => errors.push(String(e.stack || e))); vc.on('error', (e) => errors.push(String(e)));
   const calls = []; const handlers = {};
   const cfgAll = { version: '9.9.9', cfg: { ...DEFAULTS, apiKey: 'sk-test', facts: 'mom = Anna', lessons: '' }, theme: { accent: '#7aa2f7', source: 'test' }, dark: true, platform: 'Test OS', problems: ['⚠ test problem'], tts: 'espeak', hypr: true, launch: '/x/Assistant', usage: { today: 0.5, total: 3, left: 4.2, task: { in: 1000, out: 100, cost: 0.01, calls: 3 } }, facts: ['mom = Anna'] };
-  const api = { invoke: async (ch, ...a) => { calls.push([ch, ...a]); if (ch === 'cfg:all') return cfgAll; if (ch === 'hotkey:hypr') return 'CTRL + ALT + space'; return true; }, send: (...a) => calls.push(['send', ...a]), on: (ch, f) => { (handlers[ch] = handlers[ch] || []).push(f); return () => {}; }, ...apiExtra };
+  const api = { invoke: async (ch, ...a) => { calls.push([ch, ...a]); if (ch === 'cfg:all') return cfgAll; if (ch === 'hotkey:hypr') return 'CTRL + ALT + space'; if (ch === 'tts:info') return { info: 'Piper · test', ready: true, voices: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], voice: 'a' }; if (ch === 'tts:download') return { ok: true, info: 'Piper · test' }; return true; }, send: (...a) => calls.push(['send', ...a]), on: (ch, f) => { (handlers[ch] = handlers[ch] || []).push(f); return () => {}; }, ...apiExtra };
   const dom = await JSDOM.fromFile(path.join(R, file), { runScripts: 'dangerously', resources: 'usable', pretendToBeVisual: true, virtualConsole: vc, beforeParse(w) { w.api = api; w.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, { get: () => () => ({ addColorStop() {} }) }); w.requestAnimationFrame = () => 0; w.ResizeObserver = class { observe() {} }; w.HTMLElement.prototype.scrollTo = () => {}; } });
   await new Promise((r) => dom.window.addEventListener('load', r)); await new Promise((r) => setTimeout(r, 150));
   return { dom, w: dom.window, d: dom.window.document, errors, calls, handlers, emit: (ch, ...a) => (handlers[ch] || []).forEach((f) => f(...a)) };
@@ -26,10 +26,11 @@ async function run() {
     page.querySelectorAll('.seg button').forEach((b) => b.click()); page.querySelectorAll('.chip').forEach((b) => b.click()); page.querySelectorAll('.sw').forEach((b) => b.click());
     page.querySelectorAll('input[type=range]').forEach((r) => { r.value = r.max; r.dispatchEvent(new w.Event('input')); r.dispatchEvent(new w.Event('change')); });
     page.querySelectorAll('input[type=text],input[type=password],input[type=number],textarea').forEach((i) => { i.value = i.type === 'number' ? '1.5' : 'abc'; i.dispatchEvent(new w.Event('change')); });
+    page.querySelectorAll('select').forEach((x) => { x.value = x.options[x.options.length - 1].value; x.dispatchEvent(new w.Event('change')); });
     page.querySelectorAll('button.tonal').forEach((b) => b.click());
   }
   const keys = m.calls.filter((c) => c[0] === 'cfg:set').flatMap((c) => Object.keys(c[1]));
-  for (const k of ['provider', 'apiKey', 'smartPlan', 'whisperModel', 'lang', 'glowWidth', 'glowMode', 'glowSoft', 'cardPos', 'cardStyle', 'cardText', 'anim', 'waveStyle', 'cardOpacity', 'assistantName', 'tone', 'quietOn', 'facts', 'balance', 'dailyLimit']) assert.ok(keys.includes(k), 'setting saved: ' + k);
+  for (const k of ['ttsVolume', 'ttsSpeed', 'voiceName', 'provider', 'apiKey', 'smartPlan', 'whisperModel', 'lang', 'glowWidth', 'glowMode', 'glowSoft', 'cardPos', 'cardStyle', 'cardText', 'anim', 'waveStyle', 'cardOpacity', 'assistantName', 'tone', 'quietOn', 'facts', 'balance', 'dailyLimit']) assert.ok(keys.includes(k), 'setting saved: ' + k);
   const stt = m.calls.filter((c) => c[0] === 'cfg:set' && 'whisperModel' in c[1]).map((c) => c[1].whisperModel); assert.ok(stt.includes('low') && stt.includes('medium') && stt.includes('high'), 'three STT levels: ' + stt);
   assert.ok(m.calls.some((c) => c[0] === 'ui:preview'), 'preview button'); assert.ok(m.calls.some((c) => c[0] === 'look:preset'), 'look presets'); assert.ok(m.calls.some((c) => c[0] === 'look:reset'), 'reset look');
   // events from the main process

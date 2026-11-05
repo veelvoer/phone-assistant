@@ -2,14 +2,24 @@
 const { fork } = require('child_process');
 const path = require('path');
 const { EventEmitter } = require('events');
+const models = require('./models');
 
 /** Local speech recognition (Whisper via transformers.js). */
 class Stt extends EventEmitter {
   constructor(config, cacheDir) { super(); this.config = config; this.cacheDir = cacheDir; this.worker = null; this.pending = new Map(); this.seq = 0; this.ready = false; }
+  /** Make sure the model files are on disk, then start the recogniser process. */
+  prepare() {
+    if (this.preparing) return this.preparing;
+    const model = this.config.get('whisperModel');
+    this.preparing = models.ensure(model, this.cacheDir, (v) => this.emit('progress', v)).then(() => { this.preparing = null; this.emit('progress', 1); }, (e) => { this.preparing = null; this.emit('error', e); throw e; });
+    return this.preparing;
+  }
+
   start() {
     if (this.worker) return;
+    if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) { this.prepare().then(() => this.start()).catch(() => {}); return; }
     const script = path.join(__dirname, 'proc.js');   // inside the asar: Electron-as-Node reads it, and finds node_modules next to it
-    this.worker = fork(script, [], { execPath: process.execPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ASSISTANT_STT_CACHE: this.cacheDir }, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+    this.worker = fork(script, [], { execPath: process.execPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ASSISTANT_STT_CACHE: this.cacheDir, ASSISTANT_STT_OFFLINE: '1' }, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
     this.worker.on('message', (m) => {
       if (m.type === 'progress') this.emit('progress', m.value);
       else if (m.type === 'ready') { this.ready = true; this.emit('ready'); }
@@ -20,7 +30,8 @@ class Stt extends EventEmitter {
     this.worker.send({ type: 'load', model: this.config.get('whisperModel') });
   }
   language() { const l = this.config.get('lang'); return l === 'nl' ? 'dutch' : l === 'en' ? 'english' : undefined; }
-  transcribe(float32) {
+  async transcribe(float32) {
+    if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) await this.prepare();
     this.start();
     return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.send({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: this.language() }); });
   }

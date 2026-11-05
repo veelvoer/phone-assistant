@@ -147,14 +147,23 @@ async function startVoice(temp) {
 }
 function endVoice(stopAgent) {
   if (!S.voice && !stopAgent) return;
-  if (S.voice) chime('stop'); S.voice = false; S.tempVoice = false; S.partial = ''; micCmd({ cmd: 'stop' }); tts.stop(); S.speaking = false;
+  if (S.voice) chime('stop'); S.voice = false; S.tempVoice = false; S.partial = ''; micCmd({ cmd: 'stop' }); tts.stop(); for (const d of [...playWait.values()]) d(); send(audioWin, 'audio:cmd', { cmd: 'stopplay' }); S.speaking = false;
   if (stopAgent && agent) agent.stop();
   pushState(); setTimeout(pushState, 600);
 }
+let playSeq = 0; const playWait = new Map();
+/** play 16-bit mono PCM in the audio window (our own volume/gain); resolves when it has finished */
+function playPcm(pcm, rate) {
+  return new Promise((resolve) => {
+    const id = ++playSeq; const secs = pcm.length / 2 / rate; const done = () => { clearTimeout(timer); playWait.delete(id); resolve(); };
+    const timer = setTimeout(done, secs * 1000 + 4000); playWait.set(id, done);
+    audioReady.then(() => send(audioWin, 'audio:play', { id, pcm: new Uint8Array(pcm), rate, gain: Math.max(0.3, Math.min(3, (Number(config.get('ttsVolume')) || 100) / 100)) }));
+  });
+}
 function speak(t) {
-  if (!config.get('speak') || !tts.available() || isQuiet()) return;
+  if (!config.get('speak') || !tts.available() || isQuiet()) return Promise.resolve();
   S.speaking = true; micCmd({ cmd: 'mute', on: true });
-  tts.speak(t).finally(() => { S.speaking = false; micCmd({ cmd: 'mute', on: false }); });
+  return tts.speak(t, playPcm).catch((e) => log('Voice error: ' + e.message)).finally(() => { S.speaking = false; micCmd({ cmd: 'mute', on: false }); });
 }
 
 const HALLUCINATIONS = /^(ondertitel|ondertiteld|vertaling|bedankt voor het kijken|thanks for watching|subtitles by|untertitel|amara\.org|\.+|ja\.?|you\.?|oké\.?)/i;
@@ -194,6 +203,7 @@ function registerIpc() {
     if ('hotkey' in patch) { registerHotkey(); if (isHypr() && patch.hotkey) { const r = await bindHypr(patch.hotkey); if (r !== 'ok') broadcast('toast', 'Could not bind in Hyprland: ' + r); } }
     if ('balance' in patch) usage.setBalance(patch.balance);
     if ('whisperModel' in patch || 'lang' in patch) { if (stt.worker) { stt.stop(); } }
+    if ('voiceName' in patch || 'lang' in patch) tts.ensure().then(() => send(mainWin, 'tts', { info: tts.describe(), ready: tts.ready() }));
     if (['cardPos', 'cardSize', 'cardOpacity', 'cardRadius', 'showBars', 'showProgress', 'glowOn', 'glowWidth', 'glowIntensity', 'glowSpeed', 'overlay', 'glowMode', 'glowSoft', 'glowRadius', 'accent2', 'cardOn', 'cardStyle', 'cardText', 'cardOffset', 'showTitle', 'anim', 'waveStyle', 'waveCount', 'accent'].some((k) => k in patch)) { S.previewUntil = Date.now() + 4500; await showCard(false); if (config.get('overlay')) await showFx(); pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }
     broadcast('usage', usage.summary()); return true;
   });
@@ -201,6 +211,9 @@ function registerIpc() {
   ipcMain.handle('ui:stop', () => { endVoice(true); return true; });
   ipcMain.handle('ui:voice', () => { S.voice ? endVoice(false) : startVoice(false); return true; });
   ipcMain.handle('ui:interrupt', (_e, t) => agent.interrupt(String(t)));
+  ipcMain.on('audio:played', (_e, id) => { const d = playWait.get(id); if (d) d(); });
+  ipcMain.handle('tts:info', () => ({ info: tts.describe(), ready: tts.ready(), voices: tts.voices(), voice: tts.voiceId() }));
+  ipcMain.handle('tts:download', async () => { const ok = await tts.ensure(); return { ok, info: tts.describe() }; });
   ipcMain.handle('ui:test-voice', () => { speak(config.get('lang') === 'en' ? 'Hi! This is my voice. This is how I sound when I answer you.' : 'Hoi! Dit is mijn stem. Zo klink ik als ik je een antwoord geef.'); return true; });
   ipcMain.handle('ui:warm-stt', () => { stt.start(); return true; });
   ipcMain.handle('sys:check', async () => { const r = []; r.push({ name: 'Screenshots', ok: !!(await platform.screenshot().then(() => true).catch(() => false)) }); return r; });
@@ -262,7 +275,12 @@ app.whenReady().then(async () => {
   config = new Config(path.join(app.getPath('userData'), 'config.json'));
   usage = new Usage(config);
   platform = await platformFactory.create({ screen, desktopCapturer, clipboard }).init();
-  tts = new Tts(config);
+  tts = new Tts(config, path.join(app.getPath('userData'), 'tts'));
+  tts.on('progress', (p) => send(mainWin, 'tts', { progress: p.value, label: p.label }));
+  tts.on('ready', () => send(mainWin, 'tts', { ready: true, info: tts.describe() }));
+  tts.on('error', (e) => { log('Voice: ' + e.message); send(mainWin, 'tts', { error: e.message, info: tts.describe() }); });
+  setTimeout(() => { if (config.get('speak')) tts.ensure(); }, 6000);
+  setTimeout(() => { stt.start(); }, 12000);   // load the speech model in the background so the first command is not slow
   stt = new Stt(config, path.join(app.getPath('userData'), 'models'));
   stt.on('progress', (v) => { S.sttProgress = v; pushState(); send(mainWin, 'stt', { progress: v }); });
   stt.on('ready', () => { S.sttReady = true; S.sttProgress = 1; pushState(); send(mainWin, 'stt', { ready: true }); });
@@ -306,6 +324,20 @@ async function selftest() {
     const shot = await platform.screenshot(); out.screenshotBytes = shot.png.length;
     require('fs').writeFileSync('/tmp/assistant-selftest.png', shot.png);
     out.cardBounds = win(cardWin) ? cardWin.getBounds() : null; out.fxBounds = win(fxWin) ? fxWin.getBounds() : null;
+    if (flag('--selftest-draw')) {
+      const svg = (b) => `<svg viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">${b}</svg>`;
+      const demo = svg('<rect x="40" y="170" width="170" height="90" rx="14" fill="#e8f0ff" stroke="#1d4ed8" stroke-width="3"/><text x="125" y="222" font-size="26" text-anchor="middle" fill="#111">Jouw pc</text><line x1="210" y1="215" x2="330" y2="215" stroke="#111" stroke-width="3" marker-end="url(#a)"/><rect x="330" y="170" width="170" height="90" rx="14" fill="#fff3e0" stroke="#ea580c" stroke-width="3"/><text x="415" y="222" font-size="26" text-anchor="middle" fill="#111">DNS-server</text><path d="M500 215 C560 215 560 360 620 360" fill="none" stroke="#111" stroke-width="3" marker-end="url(#a)"/><circle cx="690" cy="360" r="60" fill="#dcfce7" stroke="#16a34a" stroke-width="3"/><text x="690" y="368" font-size="24" text-anchor="middle" fill="#111">93.184.216.34</text><text x="415" y="150" font-size="22" text-anchor="middle" fill="#444">wat is het adres van example.com?</text><defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#111"/></marker></defs>');
+      await new Promise((r) => setTimeout(r, 500)); agent.emit('draw', { title: 'Hoe DNS werkt', frames: [{ svg: require('./svg').sanitizeSvg(demo), caption: 'Je pc vraagt de DNS-server naar het adres van de website.' }] });
+      for (const t of [1800, 4200, 7500, 11000]) { await new Promise((r) => setTimeout(r, t - (out.lastT || 0))); out.lastT = t; const sh = await platform.screenshot(); fs.writeFileSync(`/tmp/draw-${t}.png`, sh.png); }
+    }
+    if (flag('--selftest-tts')) {
+      const t1 = Date.now(); out.ttsReady = await tts.ensure(); out.ttsPrepMs = Date.now() - t1; out.ttsInfo = tts.describe();
+      const t2 = Date.now(); await speak('Hallo! Dit is mijn nieuwe stem. Zo klink ik als ik je een antwoord geef.'); out.ttsSpeakMs = Date.now() - t2;
+    }
+    if (flag('--selftest-stt-file')) {
+      const buf = fs.readFileSync(process.env.STT_FILE); const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4); const t1 = Date.now();
+      out.sttText = await stt.transcribe(f32); out.sttMs = Date.now() - t1; out.sttModel = config.get('whisperModel');
+    }
     if (flag('--selftest-stt')) {
       const buf = fs.readFileSync('/tmp/s1.f32'); const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4); const t1 = Date.now();
       config.set({ lang: 'en', whisperModel: 'base' }); out.stt = await stt.transcribe(f32); out.sttMs = Date.now() - t1;

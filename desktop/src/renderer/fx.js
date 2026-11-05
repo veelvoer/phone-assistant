@@ -50,6 +50,7 @@ function adapt(c) {   // the model picks colours for a light page: lift dark one
 function lenOf(el) { try { return el.getTotalLength ? el.getTotalLength() : 0; } catch { return 0; } }
 function build(frame) {
   const sv = $('sv'); sv.innerHTML = frame.svg; const svg = sv.querySelector('svg'); if (!svg) return false; svg.setAttribute('preserveAspectRatio', 'xMidYMid meet'); svg.removeAttribute('width'); svg.removeAttribute('height');
+  svg.querySelectorAll('marker *').forEach((m) => { const f = m.getAttribute('fill'), s = m.getAttribute('stroke'); if (f && f !== 'none') m.setAttribute('fill', adapt(f)); if (s && s !== 'none') m.setAttribute('stroke', adapt(s)); if (!f && !s) m.setAttribute('fill', '#fff'); });   // arrowheads must read on the dimmed screen too
   const items = []; let at = 200;
   for (const el of svg.querySelectorAll('path,line,polyline,polygon,rect,circle,ellipse,text')) {
     if (el.closest('defs,marker,clipPath,mask,symbol')) continue;
@@ -57,32 +58,32 @@ function build(frame) {
     const cs = getComputedStyle(el); const stroke = el.getAttribute('stroke') || (cs.stroke && cs.stroke !== 'none' ? cs.stroke : null); let fill = el.hasAttribute('fill') ? el.getAttribute('fill') : null; if (fill === null && !el.closest('[fill]')) fill = '#000'; else if (fill === null) fill = el.closest('[fill]').getAttribute('fill');
     const sCol = stroke && stroke !== 'none' ? adapt(stroke) : null, fCol = fill && fill !== 'none' ? adapt(fill) : null; if (!sCol && !fCol) continue;
     const len = lenOf(el), marker = el.getAttribute('marker-end'); const dur = Math.max(260, Math.min(1500, len / 1.1 || 400));
-    el.setAttribute('stroke', sCol || fCol); if (!el.getAttribute('stroke-width')) el.setAttribute('stroke-width', 2.5); el.setAttribute('fill', fCol || 'none'); if (marker) el.removeAttribute('marker-end');
+    el.setAttribute('stroke', sCol || fCol); const sw0 = parseFloat(el.getAttribute('stroke-width')) || 0; el.setAttribute('stroke-width', Math.max(sw0, 4)); el.setAttribute('fill', fCol || 'none'); if (marker) el.removeAttribute('marker-end');
     if (len > 0) { el.style.strokeDasharray = len; el.style.strokeDashoffset = len; } el.style.fillOpacity = 0;
     items.push({ el, kind: 'shape', len, start: at, dur, sCol, fCol, marker }); at += dur + (fCol ? 180 : 0) + 50;
   }
   D.items = items; D.total = at + 300; return true;
 }
 function place(el, len, p) {   // pen cursor position for a point along a shape
-  try { const svg = el.ownerSVGElement; const pt = svg.createSVGPoint(); const q = el.getPointAtLength(len * p); pt.x = q.x; pt.y = q.y; const s = pt.matrixTransform(el.getScreenCTM()); const c = $('cur'); c.style.left = s.x - 2 + 'px'; c.style.top = s.y - 2 + 'px'; c.style.opacity = 1; } catch { /* no geometry (tests) */ }
+  try { const svg = el.ownerSVGElement; const pt = svg.createSVGPoint(); const q = el.getPointAtLength(len * p); pt.x = q.x; pt.y = q.y; const s = pt.matrixTransform(el.getScreenCTM()); const c = $('dot'); c.style.left = s.x + 'px'; c.style.top = s.y + 'px'; c.style.opacity = 1; } catch { /* no geometry (tests) */ }
 }
 function tick(now) {
   const tt = now - D.t0; let head = null;
   for (const it of D.items) {
     if (tt < it.start) continue; const p = Math.max(0, Math.min(1, (tt - it.start) / it.dur));
-    if (it.kind === 'text') { it.el.textContent = it.full.slice(0, Math.max(1, Math.round(it.full.length * p))); if (p < 1) { try { const b = it.el.getBBox(); const pt = it.el.ownerSVGElement.createSVGPoint(); pt.x = b.x + b.width; pt.y = b.y + b.height * 0.7; const s = pt.matrixTransform(it.el.getScreenCTM()); const c = $('cur'); c.style.left = s.x - 2 + 'px'; c.style.top = s.y - 2 + 'px'; c.style.opacity = 1; } catch { /* no geometry */ } head = it; } continue; }
+    if (it.kind === 'text') { it.el.textContent = it.full.slice(0, Math.max(1, Math.round(it.full.length * p))); if (p < 1) { try { const b = it.el.getBBox(); const pt = it.el.ownerSVGElement.createSVGPoint(); pt.x = b.x + b.width; pt.y = b.y + b.height * 0.7; const s = pt.matrixTransform(it.el.getScreenCTM()); const c = $('dot'); c.style.left = s.x + 'px'; c.style.top = s.y + 'px'; c.style.opacity = 1; } catch { /* no geometry */ } head = it; } continue; }
     if (it.len > 0) it.el.style.strokeDashoffset = it.len * (1 - p);
-    if (p >= 1) { const f = Math.max(0, Math.min(1, (tt - it.start - it.dur) / 250)); it.el.style.fillOpacity = it.fCol ? f : 0; if (it.marker) it.el.setAttribute('marker-end', it.marker); if (!it.sCol && f >= 1) it.el.setAttribute('stroke', 'none'); }
+    if (p >= 1) { const f = Math.max(0, Math.min(1, (tt - it.start - it.dur) / 250)); it.el.style.fillOpacity = it.fCol ? f * (it.sCol ? 0.22 : 0.85) : 0; if (it.marker) it.el.setAttribute('marker-end', it.marker); if (!it.sCol && f >= 1) it.el.setAttribute('stroke', 'none'); }
     else { if (it.len > 0) place(it.el, it.len, p); head = it; }
   }
-  if (!head && tt > D.total - 300) $('cur').style.opacity = 0;
+  if (!head && tt > D.total - 300) $('dot').style.opacity = 0;
   if (tt > D.total - 200) $('dcap').style.opacity = 1;
   if (tt > D.total + 350 && !D.fired) { D.fired = true; const f = D.frames[D.i]; D.timer = setTimeout(() => { if (D.auto && D.i < D.frames.length - 1) play(D.i + 1); else D.timer = setTimeout(stopDraw, (style.hold || 5) * 2000); }, (style.hold || 5) * 1000 + (f.caption || '').length * 45); }
   if (tt <= D.total + 400) D.raf = requestAnimationFrame(() => tick(performance.now()));
 }
 function play(i) {
   cancelAnimationFrame(D.raf); clearTimeout(D.timer); D.i = Math.max(0, Math.min(D.frames.length - 1, i)); D.fired = false;
-  const f = D.frames[D.i]; if (!build(f)) return; $('draw').classList.add('on'); $('dtitle').textContent = D.i === 0 ? D.title : ''; $('dcap').textContent = f.caption || ''; $('dcap').style.opacity = 0; $('cur').style.opacity = 0;
+  const f = D.frames[D.i]; if (!build(f)) return; $('draw').classList.add('on'); $('dtitle').textContent = D.i === 0 ? D.title : ''; $('dcap').textContent = f.caption || ''; $('dcap').style.opacity = 0; $('dot').style.opacity = 0;
   const ac = window.__accent && window.__accent.accent; if (ac) $('draw').style.setProperty('--ca', ac);
   D.t0 = performance.now(); window.api.send('draw:status', { i: D.i, n: D.frames.length }); D.raf = requestAnimationFrame(() => tick(performance.now()));
 }
