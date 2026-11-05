@@ -13,6 +13,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.7' }
       - run: gradle --no-daemon testDebugUnitTest
+      - name: Summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          t=f=0
+          for p in glob.glob('app/build/test-results/testDebugUnitTest/*.xml'):
+              r=ET.parse(p).getroot(); n=int(r.get('tests')); k=int(r.get('failures'))+int(r.get('errors')); t+=n; f+=k
+              print(r.get('name'), n, 'tests', k, 'failed')
+          print('TOTAL', t, 'tests', f, 'failed')
+          PY
       - if: failure()
         uses: actions/upload-artifact@v4
         with: { name: test-report, path: app/build/reports/tests }
