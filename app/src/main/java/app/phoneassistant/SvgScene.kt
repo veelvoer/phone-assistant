@@ -18,10 +18,11 @@ class SvgScene(svg: String) {
     val shapes = ArrayList<Any>()   // Shape or Label, in drawing order
     var vbX = 0f; var vbY = 0f; var vbW = 800f; var vbH = 500f
     var totalMs = 0L
+    var error: String? = null
 
     private class St(var fill: Int? = Color.BLACK, var stroke: Int? = null, var sw: Float = 1f, var size: Float = 16f, var align: Paint.Align = Paint.Align.LEFT, var opacity: Float = 1f)
 
-    init { try { parse(svg) } catch (e: Exception) { } ; schedule() }
+    init { try { parse(svg) } catch (e: Exception) { error = e.toString() + " @ " + e.stackTrace.take(3).joinToString { it.toString() } } ; schedule() }
 
     private fun num(s: String?, def: Float = 0f): Float = s?.let { Regex("[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?").find(it)?.value?.toFloatOrNull() } ?: def
     private fun nums(s: String?): List<Float> = Regex("[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?").findAll(s ?: "").mapNotNull { it.value.toFloatOrNull() }.toList()

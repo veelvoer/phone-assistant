@@ -21,6 +21,7 @@ class SvgSanitizerTest {
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class SvgSceneTest {
     @Test fun parsesShapesLabelsAndViewBox() {
         val svg = Svg.sanitize("""<svg viewBox="0 0 800 500">
@@ -33,7 +34,7 @@ class SvgSceneTest {
         val sc = SvgScene(svg)
         assertEquals(800f, sc.vbW, 0.01f); assertEquals(500f, sc.vbH, 0.01f)
         val shapes = sc.shapes.filterIsInstance<SvgScene.Shape>(); val labels = sc.shapes.filterIsInstance<SvgScene.Label>()
-        assertEquals("shapes=${shapes.size} labels=${labels.map { it.text }} svg=$svg", 5, shapes.size); assertEquals("labels", listOf("Hallo wereld", "Titel"), labels.map { it.text })
+        assertEquals("error=${sc.error} shapes=${shapes.size} labels=${labels.map { it.text }} svg=$svg", 5, shapes.size); assertEquals("labels", listOf("Hallo wereld", "Titel"), labels.map { it.text })
         assertTrue("arrow marker detected", shapes.any { it.arrow })
         assertTrue("timeline is sequential", sc.shapes.zipWithNext().all { (a, b) -> start(b) >= start(a) }); assertTrue(sc.totalMs > 1000)
         // dark colours are lifted for the dimmed screen, bright ones kept
