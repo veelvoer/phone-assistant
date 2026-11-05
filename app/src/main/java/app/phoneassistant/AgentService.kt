@@ -93,7 +93,7 @@ class AgentService : AccessibilityService() {
 
     private fun abandonFocus() { focusReq?.let { audio.abandonAudioFocusRequest(it) }; focusReq = null }
 
-    override fun onServiceConnected() {
+    public override fun onServiceConnected() {
         instance = this
         CallManager.watch(this)
         main.removeCallbacks(callWatch); main.postDelayed(callWatch, 800)
