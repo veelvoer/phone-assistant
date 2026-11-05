@@ -25,7 +25,7 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions { unitTests { isIncludeAndroidResources = true; all { it.testLogging { exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL; showStandardStreams = true } } } }
 }
 
 dependencies {
