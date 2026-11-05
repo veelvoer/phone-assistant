@@ -135,7 +135,9 @@ class SettingsActivity : Activity() {
             group("Speech recognition", ui.tv("Language", 15f, ui.c.onSurface, true), lang, label("Recognition quality"), quality, levelNote,
                 bool("Prefer on-device recognition", "Works offline; may be less accurate than Google's online model", "stt_offline", false)),
             group("Spoken answers", bool("Spoken answers", "Silent automatically during calls and quiet hours", "speak", true),
-                label("Loudness"), seg(listOf("Normal", "Loud", "Max"), "loud", 1), label("Voice"), voiceName!!,
+                label("Volume boost"), seg(listOf("None", "Boost", "Max boost"), "loud", 1), sub("Adds loudness on top of the volume you set with your phone's volume keys (the voice plays on the media volume)."),
+                bool("Raise media volume automatically", "Lifts the media volume to at least 60% while it speaks", "auto_vol", false),
+                ui.slider("Speaking speed", "", 60, 150, (p.getFloat("speech_rate", 1.0f) * 100).toInt(), { "${it / 100f}x".replace(".0x", "x") }) { p.edit().putFloat("speech_rate", it / 100f).apply() }, label("Voice"), voiceName!!,
                 LinearLayout(this).apply { layoutParams = ui.lp(top = 12)
                     addView(ui.button("Choose voice") { pickVoice() }.apply { layoutParams = ui.lp(0, -2, weight = 1f, right = 8) })
                     addView(ui.button("Test", filled = true) { AgentService.instance?.testVoice() ?: toast("Enable the service first") }.apply { layoutParams = ui.lp(0, -2, weight = 1f) }) },
@@ -191,20 +193,45 @@ class SettingsActivity : Activity() {
     private val PRESETS = listOf(0, 0xFF7AA2F7.toInt(), 0xFF4F6BED.toInt(), 0xFF8B5CF6.toInt(), 0xFFD946EF.toInt(), 0xFFEF4444.toInt(), 0xFFF97316.toInt(), 0xFFEAB308.toInt(), 0xFF22C55E.toInt(), 0xFF14B8A6.toInt(), 0xFF06B6D4.toInt())
     private fun lookPage(root: LinearLayout) {
         fun s(key: String, def: Int, min: Int, max: Int, title: String, fmt: (Int) -> String, subT: String = "") = ui.slider(title, subT, min, max, p.getInt(key, def), fmt) { p.edit().putInt(key, it).apply(); preview() }
+        fun idx(options: List<String>, key: String, def: Int) = seg(options, key, def) { preview() }
+        val second = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun secondBox() { second.removeAllViews(); if (p.getInt("ov_accent", 0) != 0) { second.addView(label("Second colour (optional)")); second.addView(ui.swatches(p.getInt("ov_accent2", 0), PRESETS) { p.edit().putInt("ov_accent2", it).apply(); preview() }) } }
+        secondBox()
         val glowBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         fun glowOptions() { glowBox.removeAllViews(); if (p.getBoolean("ov_glow", true)) {
+            glowBox.addView(label("Where")); glowBox.addView(idx(listOf("Full edge", "Bottom", "Top", "Sides"), "ov_gm", 0))
             glowBox.addView(label("Thickness")); glowBox.addView(seg(listOf("Thin", "Normal", "Bold"), "ov_gw_i", 1) { i -> p.edit().putInt("ov_gw", i + 1).apply(); preview() })
             glowBox.addView(s("ov_gi", 80, 20, 140, "Brightness", { "$it%" }))
+            glowBox.addView(s("ov_gb", 50, 0, 100, "Softness", { "$it%" }, "Crisp line … soft haze"))
+            glowBox.addView(s("ov_gr", 46, 0, 64, "Corner radius of the glow", { "$it dp" }, "Match it to your screen corners"))
             glowBox.addView(label("Animation speed")); glowBox.addView(seg(listOf("Calm", "Normal", "Lively"), "ov_gs_i", 1) { i -> p.edit().putInt("ov_gs", i + 1).apply(); preview() }) } }
         glowOptions()
+        val cardBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun cardOptions() { cardBox.removeAllViews(); if (p.getBoolean("ov_card", true)) {
+            cardBox.addView(label("Position")); cardBox.addView(seg(listOf("Bottom", "Top"), "ov_pos_i", 0) { i -> p.edit().putString("ov_pos", if (i == 0) "bottom" else "top").apply(); preview() })
+            cardBox.addView(label("Size")); cardBox.addView(idx(listOf("Compact", "Normal", "Large"), "ov_size", 1))
+            cardBox.addView(label("Style")); cardBox.addView(idx(listOf("Solid", "Outline", "Tinted"), "ov_cs", 0))
+            cardBox.addView(s("ov_alpha", 94, 40, 100, "Transparency", { "$it% solid" }, "Lower = see-through"))
+            cardBox.addView(s("ov_radius", 28, 8, 40, "Corner roundness", { "$it dp" }))
+            cardBox.addView(s("ov_text", 17, 13, 24, "Text size", { "$it sp" }))
+            cardBox.addView(s("ov_off", 26, 8, 140, "Distance from the edge", { "$it dp" }))
+            cardBox.addView(bool("Show the title line", "", "ov_title", true) { preview() })
+            cardBox.addView(label("Appearing")); cardBox.addView(idx(listOf("Slide", "Fade", "Pop"), "ov_anim", 0))
+            cardBox.addView(label("Voice indicator")); cardBox.addView(bool("Show it", "", "ov_bars", true) { preview() })
+            cardBox.addView(idx(listOf("Bars", "Dots", "Ring"), "ov_ws", 0)); cardBox.addView(s("ov_wc", 4, 3, 7, "Bars / dots", { "$it" }))
+            cardBox.addView(bool("Plan progress bar", "", "ov_prog", true) { preview() }) } }
+        cardOptions()
+        val presets = LinearLayout(this).apply { layoutParams = ui.lp(top = 10) }
+        val presetRow = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presets) }
+        listOf("classic" to "Classic", "minimal" to "Minimal", "neon" to "Neon", "calm" to "Calm", "glass" to "Glass", "contrast" to "High contrast", "bottom" to "Bottom glow").forEach { (id, n) ->
+            presets.addView(ui.chip(n) { OverlayStyle.applyPreset(this, id); preview(); open("look") })
+        }
         add(root,
-            group("Colour", sub("Accent colour of the glow and the card. “A” follows your system colours."), ui.swatches(p.getInt("ov_accent", 0), PRESETS) { p.edit().putInt("ov_accent", it).apply(); preview() }),
+            group("Looks", sub("One tap, then fine-tune below."), presetRow, ui.button("Reset to default") { OverlayStyle.reset(this); preview(); open("look") }.apply { layoutParams = ui.lp(top = 6) }),
+            group("Colour", sub("Accent colour of the glow and the card. “A” follows your system colours."), ui.swatches(p.getInt("ov_accent", 0), PRESETS) { p.edit().putInt("ov_accent", it).apply(); if (it == 0) p.edit().putInt("ov_accent2", 0).apply(); secondBox(); preview() }, second),
             group("Screen glow", bool("Glowing edge", "The animated light around the screen while it works", "ov_glow", true) { glowOptions(); preview() }, glowBox),
-            group("Card", label("Position"), seg(listOf("Bottom", "Top"), "ov_pos_i", 0) { i -> p.edit().putString("ov_pos", if (i == 0) "bottom" else "top").apply(); preview() },
-                label("Size"), seg(listOf("Compact", "Normal", "Large"), "ov_size", 1) { preview() },
-                s("ov_alpha", 94, 40, 100, "Transparency", { "$it% solid" }, "Lower = see-through"), s("ov_radius", 28, 8, 40, "Corner roundness", { "$it dp" }),
-                bool("Voice bars", "", "ov_bars", true) { preview() }, bool("Plan progress bar", "", "ov_prog", true) { preview() },
-                ui.slider("Show results for", "", 2, 15, p.getFloat("ov_hold", 4.5f).toInt(), { "$it s" }) { p.edit().putFloat("ov_hold", it.toFloat()).apply() }),
+            group("Card", bool("Show the card", "Turn it off to keep only the glow", "ov_card", true) { cardOptions(); preview() }, cardBox),
+            group("Results", ui.slider("Show results for", "", 2, 15, p.getFloat("ov_hold", 4.5f).toInt(), { "$it s" }) { p.edit().putFloat("ov_hold", it.toFloat()).apply() }),
             arrayOf<View>(ui.button("Preview", filled = true) { preview() }.apply { layoutParams = ui.lp(top = 18) }))
     }
 
@@ -228,7 +255,7 @@ class SettingsActivity : Activity() {
 
     // ---------------- Calls ----------------
     private val VOIP = listOf("com.whatsapp", "com.whatsapp.w4b", "org.telegram.messenger", "org.thoughtcrime.securesms", "com.facebook.orca", "com.microsoft.teams", "com.skype.raider", "com.discord", "com.viber.voip", "com.google.android.apps.tachyon", "com.snapchat.android")
-    private fun modeName(m: String) = when (m) { "speaker" -> "Talks to the caller (loudspeaker)"; "text" -> "Silent text reply"; else -> "Off" }
+    private fun modeName(m: String) = when (m) { "speaker" -> "Answers and talks on the loudspeaker"; "text" -> "Silent: declines and chats by text"; else -> "Off" }
     private fun appLabel(pkg: String): String = if (pkg == CallManager.PHONE) "Phone (regular calls)" else try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (e: Exception) { pkg }
 
     private fun callsPage(root: LinearLayout) {
@@ -238,9 +265,9 @@ class SettingsActivity : Activity() {
             val on = CallManager.enabled(this)
             body.addView(ui.card(ui.toggleRow("Call assistant", "Let the assistant handle calls you don't pick up", on) { v ->
                 p.edit().putBoolean("call_on", v).apply()
-                if (v) { askCallPermissions(); CallManager.watch(this) }
+                if (v) { if (CallManager.modes(this).isEmpty()) CallManager.setMode(this, CallManager.PHONE, "text"); askCallPermissions(); CallManager.watch(this); CallManager.event("call assistant turned on") }
                 build()
-            }, sub("It always starts by saying it's your AI assistant. Experimental: Android doesn't give apps access to call audio, so a conversation works over the loudspeaker and the microphone and is not silent.")))
+            }, sub("Silent: when you don't pick up, it declines the call and chats with the caller by text (SMS, WhatsApp, Telegram…), then tells you what it was about. Talk: it answers on the loudspeaker; Android gives apps no access to call audio, so this is not silent and may fall back to texting. It always says it's your AI assistant.")))
             if (!on) return
             val missing = CallManager.missingPermissions(this)
             val status = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -270,6 +297,13 @@ class SettingsActivity : Activity() {
             body.addView(ui.card(label("Your name for callers"), field("e.g. Warre", "call_owner"), sub("“Hello, I'm Assistant, Warre's AI assistant.” Empty = “my owner”."),
                 label("What it should do"), field("Ask who is calling and why, take a message and say I'll call back.", "call_rules", multi = true, minLines = 3),
                 label("Text reply message"), field("Hi, this is Assistant. I can't pick up right now…", "call_text", multi = true, minLines = 3), sub("Sent as an SMS (or in the app chat) when you pick “Silent text reply”. Empty = a friendly default.")))
+            body.addView(ui.sectionTitle("Test and diagnostics"))
+            val diag = ui.tv(CallManager.diagnostics(this) + "\n\n" + (CallManager.recentEvents().joinToString("\n").ifEmpty { "No call events yet." }), 12f, ui.c.onSurfaceV, mono = true)
+            body.addView(ui.card(diag,
+                LinearLayout(this).apply { layoutParams = ui.lp(top = 12)
+                    addView(ui.button("Test talking") { if (AgentService.instance == null) toast("Turn on the accessibility service first") else { CallManager.testSession(this@SettingsActivity); toast("Listen: it starts a test conversation. Say something.") } }.apply { layoutParams = ui.lp(0, -2, weight = 1f, right = 8) })
+                    addView(ui.button("Preview text") { CallManager.testText(this@SettingsActivity).let { toast(it.take(80)) }; diag.text = CallManager.diagnostics(this@SettingsActivity) + "\n\n" + CallManager.recentEvents().joinToString("\n") }.apply { layoutParams = ui.lp(0, -2, weight = 1f) }) },
+                sub("“Test talking” runs the spoken conversation without a real call, so you can check the voice and microphone. The log above shows what the assistant saw and did during real calls.")))
             val recent = CallManager.recent(this)
             body.addView(ui.sectionTitle("Recently handled"))
             body.addView(ui.card(*(if (recent.isEmpty()) listOf<View>(sub("Nothing yet.")) else recent.take(8).map { (t, who, what) ->
@@ -280,7 +314,7 @@ class SettingsActivity : Activity() {
     }
 
     private fun chooseMode(pkg: String, done: () -> Unit) {
-        val opts = arrayOf("Off", "Talk to the caller (loudspeaker)", "Silent text reply"); val vals = arrayOf("off", "speaker", "text")
+        val opts = arrayOf("Off", "Answer and talk (loudspeaker, not silent)", "Silent: decline and chat by text"); val vals = arrayOf("off", "speaker", "text")
         AlertDialog.Builder(this).setTitle(appLabel(pkg)).setSingleChoiceItems(opts, vals.indexOf(CallManager.modes(this)[pkg] ?: "off").coerceAtLeast(0)) { d, i -> CallManager.setMode(this, pkg, vals[i]); d.dismiss(); done() }.setNegativeButton("Cancel", null).show()
     }
 

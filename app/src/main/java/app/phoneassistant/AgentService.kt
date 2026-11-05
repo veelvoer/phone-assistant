@@ -86,8 +86,8 @@ class AgentService : AccessibilityService() {
 
     private fun takeFocus() {
         val r = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            .setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANT).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setOnAudioFocusChangeListener { c -> if (c == android.media.AudioManager.AUDIOFOCUS_LOSS || c == android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) main.post { tts?.stop(); speaking = false; if (voice) startRec() } }.build()
+            .setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setOnAudioFocusChangeListener { c -> if (c == android.media.AudioManager.AUDIOFOCUS_LOSS || c == android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) main.post { tts?.stop(); stopPlayback(); speaking = false; if (voice) startRec() } }.build()
         focusReq = r; audio.requestAudioFocus(r)
     }
 
@@ -100,8 +100,8 @@ class AgentService : AccessibilityService() {
         tts = TextToSpeech(this) { ttsReady = it == TextToSpeech.SUCCESS }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {}
-            override fun onDone(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); speechFinished() } }
-            @Deprecated("") override fun onError(id: String?) { main.post { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); speechFinished() } }
+            override fun onDone(id: String?) { main.post { if (id != null && id.startsWith("s")) { synthText.remove(id); playFile(id, callModeForId.remove(id) ?: false) } else { ttsBusyDirect = false; endSpeech() } } }
+            @Deprecated("") override fun onError(id: String?) { main.post { if (id != null && id.startsWith("s")) { synthFiles.remove(id); val tx = synthText.remove(id); val e2 = tts; if (tx != null && e2 != null) directSpeak(e2, tx) else endSpeech() } else { ttsBusyDirect = false; endSpeech() } } }
         })
     }
     @Volatile private var lastEvent = 0L
@@ -401,8 +401,19 @@ class AgentService : AccessibilityService() {
         } catch (x: Exception) { null }
     }
 
+    // ---- speech output: synthesised to a file and played as media, so the normal volume keys work and we can add gain ----
     private var enhancer: android.media.audiofx.LoudnessEnhancer? = null
+    private var player: android.media.MediaPlayer? = null
     private var savedVol = -1
+    private val synthFiles = HashMap<String, java.io.File>()
+
+    private fun gainMb(): Int = intArrayOf(0, 1200, 2400)[pref().getInt("loud", 1).coerceIn(0, 2)]
+
+    private fun stopPlayback() {
+        try { player?.stop() } catch (x: Exception) { }
+        try { player?.release() } catch (x: Exception) { }
+        player = null
+    }
 
     private fun boostEnd() {
         try { enhancer?.release() } catch (x: Exception) { }
@@ -410,16 +421,32 @@ class AgentService : AccessibilityService() {
         if (savedVol >= 0) { try { audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, savedVol, 0) } catch (x: Exception) { }; savedVol = -1 }
     }
 
-    /** The text-to-speech voice is quiet by default: lift the media volume while it speaks and add gain. */
-    private fun boostStart(sessionId: Int) {
-        val level = getSharedPreferences("p", MODE_PRIVATE).getInt("loud", 1)
-        if (level == 0) return
+    /** Optional (off by default): lift the media volume to at least 60% while it speaks. Normally you control the volume with the phone's volume keys. */
+    private fun maybeRaiseVolume() {
+        if (!pref().getBoolean("auto_vol", false)) return
         try {
             val max = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC); val cur = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
-            val want = (max * (if (level >= 2) 0.9 else 0.7)).toInt()
-            if (cur < want) { savedVol = cur; audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, want, 0) }
+            val want = (max * 0.6).toInt(); if (cur < want) { savedVol = cur; audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, want, 0) }
         } catch (x: Exception) { }
-        try { enhancer = android.media.audiofx.LoudnessEnhancer(sessionId).apply { setTargetGain(if (level >= 2) 1800 else 1000); enabled = true } } catch (x: Exception) { }
+    }
+
+    private fun endSpeech() {
+        speaking = false; abandonFocus(); stopPlayback(); boostEnd(); if (voice) startRec(); speechFinished()
+    }
+
+    private fun playFile(id: String, callMode: Boolean) {
+        val f = synthFiles.remove(id)
+        if (f == null || !f.exists() || f.length() < 100) { endSpeech(); return }
+        try {
+            stopPlayback()
+            val mp = android.media.MediaPlayer()
+            mp.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(if (callMode) android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION else android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            mp.setDataSource(f.path); mp.prepare()
+            if (gainMb() > 0) { try { enhancer?.release(); enhancer = android.media.audiofx.LoudnessEnhancer(mp.audioSessionId).apply { setTargetGain(gainMb()); enabled = true } } catch (x: Exception) { } }
+            mp.setOnCompletionListener { main.post { f.delete(); endSpeech() } }
+            mp.setOnErrorListener { _, _, _ -> main.post { f.delete(); endSpeech() }; true }
+            player = mp; mp.start()
+        } catch (x: Exception) { try { f.delete() } catch (y: Exception) { }; endSpeech() }
     }
 
     /** Make written text sound right when read aloud. */
@@ -441,20 +468,28 @@ class AgentService : AccessibilityService() {
     fun speak(t: String, force: Boolean = false) = main.post {
         val e = tts
         if (e == null || !ttsReady || t.isBlank() || (!force && (inCall() || voipActive() || isQuiet() || !pref().getBoolean("speak", true)))) { speechFinished(); return@post }
-        speaking = true; rec?.cancel(); rec?.destroy(); rec = null
+        speaking = true; rec?.cancel(); rec?.destroy(); rec = null; stopPlayback()
         val tag = langTag(); val loc = if (tag.isEmpty()) Locale.getDefault() else Locale.forLanguageTag(tag)
         e.language = loc
         bestVoice(e, loc)?.let { e.voice = it }
-        e.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANT).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
-        e.setSpeechRate(1.0f); e.setPitch(1.0f)
-        takeFocus()
-        val sid = audio.generateAudioSessionId()
-        boostEnd(); boostStart(sid)
-        val params = Bundle().apply { putInt(TextToSpeech.Engine.KEY_PARAM_SESSION_ID, sid); putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f) }
+        e.setSpeechRate(pref().getFloat("speech_rate", 1.0f)); e.setPitch(1.0f)
+        takeFocus(); boostEnd(); maybeRaiseVolume()
         val txt = speechText(t).take(700)
-        if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, params, "u") != TextToSpeech.SUCCESS) { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); return@post }
-        // never stay deaf if the "done" callback gets lost
-        main.postDelayed({ if (speaking) { speaking = false; abandonFocus(); boostEnd(); if (voice) startRec(); speechFinished() } }, 2500L + txt.length * 80L)
+        val id = "s" + System.nanoTime(); val f = java.io.File(cacheDir, "tts_$id.wav"); synthFiles[id] = f
+        val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f) }
+        callModeForId[id] = CallManager.sessionActive(); synthText[id] = txt
+        if (e.synthesizeToFile(txt, params, f, id) != TextToSpeech.SUCCESS) { synthFiles.remove(id); directSpeak(e, txt) }
+        // never stay deaf if a callback gets lost
+        main.postDelayed({ if (speaking && synthFiles.containsKey(id)) { synthFiles.remove(id); endSpeech() } else if (speaking && player == null && !ttsBusyDirect) endSpeech() }, 6000L + txt.length * 90L)
+    }
+
+    private val callModeForId = HashMap<String, Boolean>()
+    private val synthText = HashMap<String, String>()
+    private var ttsBusyDirect = false
+    private fun directSpeak(e: TextToSpeech, txt: String) {
+        ttsBusyDirect = true
+        e.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+        if (e.speak(txt, TextToSpeech.QUEUE_FLUSH, Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f) }, "d" + System.nanoTime()) != TextToSpeech.SUCCESS) { ttsBusyDirect = false; endSpeech() }
     }
 
     /** Blocks the agent thread until the user answers by voice. */
@@ -787,7 +822,7 @@ class AgentService : AccessibilityService() {
         a.put(tool("plan", "Set your GOAL and to-do list. Call it FIRST in every task (it is forced on your first turn), and again whenever a step is done/started or the user changes the task. Always send everything.", JSONObject().put("screen_now", p("string", "FIRST look at the screen list: what app and screen is this, and what on it matters for the task? one or two sentences")).put("goal", p("string", "the concrete end result the user wants, one sentence")).put("done_when", p("string", "what exactly must be visible/true on screen to prove the goal is reached")).put("items", JSONObject().put("type", "array").put("items", item)), listOf("screen_now", "goal", "done_when", "items")))
         val hi = JSONObject().put("type", "object").put("properties", JSONObject().put("text", p("string", "visible text of the element, located live")).put("substring", p("string", "exact piece of the text to box only that part")).put("id", p("integer", "element id from the latest list")).put("x", p("integer")).put("y", p("integer")).put("w", p("integer")).put("h", p("integer")).put("label", p("string", "short note shown next to it")))
         val fr = JSONObject().put("type", "object").put("properties", JSONObject().put("svg", p("string", "complete <svg viewBox='0 0 800 500'>…</svg>")).put("caption", p("string", "one or two sentences explaining this frame"))).put("required", JSONArray(listOf("svg")))
-        a.put(tool("draw", "Draw a clear visual for the user on a whiteboard card: diagrams, flows, maps, comparisons, step-by-step schemes. Give 1-6 frames (slides with captions) of SVG (viewBox 0 0 800 500, no scripts, no images). Use dark strokes and fills on the light background, accent colour #4f6bed, readable text (font-size >= 20), generous spacing, arrows with marker-end, labels near shapes. Use it when the user asks to explain, teach, sketch or visualise something.", JSONObject().put("title", p("string")).put("frames", JSONObject().put("type", "array").put("items", fr)), listOf("title", "frames")))
+        a.put(tool("draw", "Draw a clear visual directly on the user's screen, stroke by stroke with a pen cursor: diagrams, flows, maps, comparisons, step-by-step schemes. Give 1-6 frames (slides with captions) of SVG (viewBox 0 0 800 500, no scripts, no images, no gradients). Order the elements the way you would draw them by hand; use simple paths, lines, rects, circles and text; colours are adapted to the dimmed screen; readable text (font-size >= 22), generous spacing, arrows as a line/path with marker-end, labels next to shapes. Use it when the user asks to explain, teach, sketch or visualise something.", JSONObject().put("title", p("string")).put("frames", JSONObject().put("type", "array").put("items", fr)), listOf("title", "frames")))
         a.put(tool("highlight", "Show the user something on their screen: dims the screen and outlines exactly the thing, with an optional label. Use it for 'show me / where is / which one / point out / find' requests or to point at an answer (price, button, message). Each item: text = the visible text of the element (best: located live, always accurate), plus substring = an exact piece of a long text to box only that part (e.g. a price or a name inside a paragraph); or id from the latest list; or raw pixels x,y,w,h. A screenshot is attached afterwards: check the outline, redo if off. Then finish with a short spoken explanation.", JSONObject().put("items", JSONObject().put("type", "array").put("items", hi)).put("seconds", p("integer", "how long to keep it, default 10")), listOf("items")))
         a.put(tool("tap_labels", "Tap several elements in order by their exact visible label/description, resolved live. Use for ANY sequence of buttons: calculator digits and operators (e.g. [\"1\",\"2\",\"multiply\",\"5\",\"equals\"]), keypads, dialers, PIN pads. Far more reliable than tapping ids one by one.", JSONObject().put("labels", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("labels")))
         a.put(tool("find_tap", "Find an element by its visible text/description (fuzzy, ignores case/accents), scrolling the page if needed, and tap it. Much faster than scrolling and tapping by hand: use for known buttons, contacts, list items, settings.", JSONObject().put("text", p("string")), listOf("text")))
@@ -1108,14 +1143,14 @@ class AgentService : AccessibilityService() {
         return lines
     }
 
-    private var board: Board? = null
+    private var board: DrawOverlay? = null
     private fun drawBoard(i: JSONObject): String {
         val arr = i.optJSONArray("frames") ?: return "error: frames missing"
-        val fs = ArrayList<Board.Frame>()
-        for (k in 0 until minOf(arr.length(), 6)) { val o = arr.optJSONObject(k) ?: continue; val svg = Svg.sanitize(o.optString("svg")); if (svg.isNotEmpty()) fs.add(Board.Frame(svg, o.optString("caption").take(300))) }
+        val fs = ArrayList<DrawOverlay.Frame>()
+        for (k in 0 until minOf(arr.length(), 6)) { val o = arr.optJSONObject(k) ?: continue; val svg = Svg.sanitize(o.optString("svg")); if (svg.isNotEmpty()) fs.add(DrawOverlay.Frame(svg, o.optString("caption").take(300))) }
         if (fs.isEmpty()) return "error: no valid SVG (it must start with <svg viewBox=\"0 0 800 500\"> and use only shapes and text)"
-        main.post { (board ?: Board(this).also { board = it }).show(i.optString("title").take(80), fs) }
-        return "showing ${fs.size} frame(s) on the whiteboard"
+        main.post { (board ?: DrawOverlay(this).also { board = it }).show(i.optString("title").take(80), fs) }
+        return "drawing ${fs.size} frame(s) live on the user's screen"
     }
 
     private fun highlight(i: JSONObject): String {

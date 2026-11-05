@@ -27,9 +27,10 @@ class Annotations(private val ctx: Context) {
     fun show(items: List<Item>, seconds: Int) {
         if (view == null) {
             val v = V(ctx)
-            wm.addView(v, WindowManager.LayoutParams(-1, -1, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            val bb = wm.maximumWindowMetrics.bounds
+            wm.addView(v, WindowManager.LayoutParams(bb.width(), bb.height(), WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT))
+                PixelFormat.TRANSLUCENT).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START; layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS })
             view = v
         }
         view!!.items = items; view!!.alpha = 0f; view!!.animate().alpha(1f).setDuration(220).start(); view!!.invalidate()
