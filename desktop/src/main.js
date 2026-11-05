@@ -215,7 +215,7 @@ function registerIpc() {
   ipcMain.handle('tts:info', () => ({ info: tts.describe(), ready: tts.ready(), voices: tts.voices(), voice: tts.voiceId() }));
   ipcMain.handle('tts:download', async () => { const ok = await tts.ensure(); return { ok, info: tts.describe() }; });
   ipcMain.handle('ui:test-voice', () => { speak(config.get('lang') === 'en' ? 'Hi! This is my voice. This is how I sound when I answer you.' : 'Hoi! Dit is mijn stem. Zo klink ik als ik je een antwoord geef.'); return true; });
-  ipcMain.handle('ui:warm-stt', () => { stt.start(); return true; });
+  ipcMain.handle('ui:warm-stt', () => true);
   ipcMain.handle('sys:check', async () => { const r = []; r.push({ name: 'Screenshots', ok: !!(await platform.screenshot().then(() => true).catch(() => false)) }); return r; });
   ipcMain.handle('hypr:bind', async (_e, accel) => bindHypr(accel || config.get('hotkey')));
   ipcMain.handle('hotkey:hypr', (_e, accel) => toHypr(accel));
@@ -243,7 +243,7 @@ function handleArgs(args) {
   if (args.includes('--toggle')) toggle();
   else if (args.includes('--ask')) { S.keepCard = true; showCard(true).then(showFx); }
   else if (args.includes('--stop')) endVoice(true);
-  else if (args.includes('--show')) { mainWin.show(); mainWin.focus(); }
+  else if (args.includes('--show') || !['--toggle', '--ask', '--stop', '--run', '--hidden'].some((x) => args.includes(x))) { if (mainWin) { if (mainWin.isMinimized()) mainWin.restore(); mainWin.show(); mainWin.focus(); } }   // starting the app again opens its window
   const ri = args.indexOf('--run'); if (ri >= 0 && args[ri + 1]) handleText(args[ri + 1], false);
 }
 
@@ -280,7 +280,6 @@ app.whenReady().then(async () => {
   tts.on('ready', () => send(mainWin, 'tts', { ready: true, info: tts.describe() }));
   tts.on('error', (e) => { log('Voice: ' + e.message); send(mainWin, 'tts', { error: e.message, info: tts.describe() }); });
   setTimeout(() => { if (config.get('speak')) tts.ensure(); }, 6000);
-  setTimeout(() => { stt.start(); }, 12000);   // load the speech model in the background so the first command is not slow
   stt = new Stt(config, path.join(app.getPath('userData'), 'models'));
   stt.on('progress', (v) => { S.sttProgress = v; pushState(); send(mainWin, 'stt', { progress: v }); });
   stt.on('ready', () => { S.sttReady = true; S.sttProgress = 1; pushState(); send(mainWin, 'stt', { ready: true }); });

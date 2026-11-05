@@ -15,7 +15,11 @@ class Stt extends EventEmitter {
     return this.preparing;
   }
 
+  /** The recogniser holds ~1.5 GB, so it only lives while it is being used: it is stopped again after a quiet spell. */
+  touch() { clearTimeout(this.idle); this.idle = setTimeout(() => this.stop(), 90000); if (this.idle.unref) this.idle.unref(); }
+
   start() {
+    this.touch();
     if (this.worker) return;
     if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) { this.prepare().then(() => this.start()).catch(() => {}); return; }
     const script = path.join(__dirname, 'proc.js');   // inside the asar: Electron-as-Node reads it, and finds node_modules next to it
@@ -26,16 +30,17 @@ class Stt extends EventEmitter {
       else if (m.type === 'result' || m.type === 'error') { const p = this.pending.get(m.id); if (p) { this.pending.delete(m.id); m.type === 'result' ? p.res(m.text) : p.rej(new Error(m.error)); } }
     });
     this.worker.on('error', (e) => { this.emit('error', e); this.worker = null; this.ready = false; });
-    this.worker.on('exit', () => { this.worker = null; this.ready = false; for (const p of this.pending.values()) p.rej(new Error('speech engine stopped')); this.pending.clear(); });
+    const me = this.worker;
+    this.worker.on('exit', () => { if (this.worker === me) { this.worker = null; this.ready = false; } for (const p of this.pending.values()) p.rej(new Error('speech engine stopped')); this.pending.clear(); });
     this.worker.send({ type: 'load', model: this.config.get('whisperModel') });
   }
   language() { const l = this.config.get('lang'); return l === 'nl' ? 'dutch' : l === 'en' ? 'english' : undefined; }
   async transcribe(float32) {
     if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) await this.prepare();
-    this.start();
+    this.start(); this.touch();
     return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.send({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: this.language() }); });
   }
-  stop() { if (this.worker) this.worker.kill(); }
+  stop() { clearTimeout(this.idle); if (this.worker) { const w = this.worker; this.worker = null; this.ready = false; w.kill(); } }
 }
 
 // replace words that are almost a known name ("Yan" -> "Jan")
