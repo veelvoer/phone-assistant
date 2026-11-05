@@ -27,7 +27,8 @@ const SECTIONS = [
     { title: 'Speech recognition', items: [
       { type: 'seg', key: 'lang', title: 'Language', options: [['nl', 'Nederlands'], ['en', 'English'], ['auto', 'Auto']] },
       { type: 'seg', key: 'whisperModel', title: 'Recognition quality', sub: 'Runs on this computer. In my Dutch test the word error rate was about 48% (Low), 14–24% (Medium) and 6% (High).', norm: (v) => ({ base: 'low', small: 'medium' }[v] || v), options: [['low', 'Low', 'Base · 80 MB · fast'], ['medium', 'Medium', 'Small · 240 MB · okay'], ['high', 'High', 'Large-v3 Turbo · 760 MB · best']] },
-      { type: 'buttons', buttons: [{ label: 'Download speech model now', action: 'warm' }] },
+      { type: 'buttons', buttons: [{ label: 'Test speech', action: 'testStt' }, { label: 'Download speech model now', action: 'warm' }] },
+      { type: 'note', id: 'sttTest', text: 'Press “Test speech”, say something (mix in English words if you like) and see what the computer heard.' },
       { type: 'note', id: 'sttInfo', text: 'The speech model downloads once, the first time you use voice.' },
     ] },
     { title: 'Spoken answers', items: [
@@ -122,7 +123,7 @@ function controlFor(it) {
   i.onchange = () => commit(typ === 'number' ? (i.value === '' ? (it.key === 'balance' ? null : 0) : Number(i.value)) : i.value.trim());
   return i;
 }
-const ACTIONS = { ttsDownload: async () => { toast('Downloading the voice…'); const r = await A.invoke('tts:download'); toast(r.ok ? 'Voice ready' : 'Voice download failed'); const n = $('ttsInfo'); if (n) n.textContent = r.info; }, resetLook: async () => { cfg = (await A.invoke('look:reset')); rerender(SECTIONS.find((x) => x.id === 'look')); toast('Appearance reset'); }, warm: () => { A.invoke('ui:warm-stt'); toast('Downloading the speech model…'); }, testVoice: () => A.invoke('ui:test-voice'), preview: () => A.invoke('ui:preview'), checkUpd: () => A.invoke('update:check') };
+const ACTIONS = { ttsDownload: async () => { toast('Downloading the voice…'); const r = await A.invoke('tts:download'); toast(r.ok ? 'Voice ready' : 'Voice download failed'); const n = $('ttsInfo'); if (n) n.textContent = r.info; }, resetLook: async () => { cfg = (await A.invoke('look:reset')); rerender(SECTIONS.find((x) => x.id === 'look')); toast('Appearance reset'); }, warm: () => { A.invoke('ui:warm-stt'); toast('Downloading the speech model…'); }, testVoice: () => A.invoke('ui:test-voice'), testStt: async () => { const n = $('sttTest'); if (n) n.textContent = '🎤 Listening… speak now'; const r = await A.invoke('stt:test'); if (n && r) n.textContent = r.error ? 'Problem: ' + r.error : r.text ? `“${r.text}”  ·  ${(r.ms / 1000).toFixed(1)} s` : 'Nothing heard. Check the microphone and try again.'; }, preview: () => A.invoke('ui:preview'), checkUpd: () => A.invoke('update:check') };
 function buildItem(it, sec) {
   it.__sec = sec;
   if (it.type === 'buttons') { const w = el('<div class="item"><div class="row"></div></div>'); for (const b of it.buttons) { const x = el(`<button class="tonal" type="button">${esc(b.label)}</button>`); x.onclick = () => ACTIONS[b.action] && ACTIONS[b.action](); w.firstChild.appendChild(x); } return w; }

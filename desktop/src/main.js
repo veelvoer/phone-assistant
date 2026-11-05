@@ -169,8 +169,10 @@ function speak(t) {
 const HALLUCINATIONS = /^(ondertitel|ondertiteld|vertaling|bedankt voor het kijken|thanks for watching|subtitles by|untertitel|amara\.org|\.+|ja\.?|you\.?|oké\.?)/i;
 async function onUtterance(buf) {
   if (S.speaking) return;
+  const testing = S.sttTest;
   try {
     const f32 = new Float32Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf);
+    if (testing) { const t0 = Date.now(); try { testing({ text: (await stt.transcribe(f32)).trim(), ms: Date.now() - t0 }); } catch (e) { testing({ error: e.message }); } return; }
     S.partial = '…'; pushState();
     let text = await stt.transcribe(f32); S.partial = '';
     text = fixNames(text, config.names()).trim();
@@ -215,7 +217,14 @@ function registerIpc() {
   ipcMain.handle('tts:info', () => ({ info: tts.describe(), ready: tts.ready(), voices: tts.voices(), voice: tts.voiceId() }));
   ipcMain.handle('tts:download', async () => { const ok = await tts.ensure(); return { ok, info: tts.describe() }; });
   ipcMain.handle('ui:test-voice', () => { speak(config.get('lang') === 'en' ? 'Hi! This is my voice. This is how I sound when I answer you.' : 'Hoi! Dit is mijn stem. Zo klink ik als ik je een antwoord geef.'); return true; });
-  ipcMain.handle('ui:warm-stt', () => true);
+  ipcMain.handle('ui:warm-stt', () => { stt.prepare().catch(() => {}); return true; });
+  ipcMain.handle('stt:test', () => new Promise((resolve) => {
+    if (S.voice) return resolve({ error: 'Stop the voice session first.' });
+    if (S.sttTest) S.sttTest({ error: 'cancelled' });
+    const done = (r) => { clearTimeout(t); S.sttTest = null; micCmd({ cmd: 'stop' }); resolve(r); };
+    const t = setTimeout(() => done({ text: '', ms: 0 }), 25000); S.sttTest = done;
+    stt.start(); micCmd({ cmd: 'start' });
+  }));
   ipcMain.handle('sys:check', async () => { const r = []; r.push({ name: 'Screenshots', ok: !!(await platform.screenshot().then(() => true).catch(() => false)) }); return r; });
   ipcMain.handle('hypr:bind', async (_e, accel) => bindHypr(accel || config.get('hotkey')));
   ipcMain.handle('hotkey:hypr', (_e, accel) => toHypr(accel));

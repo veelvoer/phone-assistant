@@ -35,7 +35,7 @@ parentPort.on('message', async (m) => {
       const audio = m.audio instanceof Float32Array ? m.audio : new Float32Array(m.audio.buffer ? m.audio.buffer.slice(m.audio.byteOffset || 0, (m.audio.byteOffset || 0) + (m.audio.byteLength || m.audio.length)) : m.audio);
       let peak = 0; for (let i = 0; i < audio.length; i++) { const v = Math.abs(audio[i]); if (v > peak) peak = v; }
       if (peak > 0.004 && peak < 0.8) { const k = Math.min(25, 0.9 / peak); for (let i = 0; i < audio.length; i++) audio[i] *= k; }   // quiet microphones: bring the level up
-      const opts = { task: 'transcribe', chunk_length_s: 30 }; if (m.language) opts.language = m.language;
+      const opts = { task: 'transcribe', chunk_length_s: 30, num_beams: 4 }; if (m.language) opts.language = m.language;
       const out = await asr(audio, opts);
       parentPort.postMessage({ type: 'result', id: m.id, text: String(out.text || '').trim() });
     }
