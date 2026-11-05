@@ -1,7 +1,7 @@
 {
   "name": "phone-assistant-desktop",
   "productName": "Assistant",
-  "version": "1.5.9",
+  "version": "1.5.10",
   "description": "Claude controls your computer: voice, shell and screen control. Linux (Hyprland/X11/Wayland) and Windows.",
   "main": "src/main.js",
   "author": "veelvoer",

@@ -23,7 +23,10 @@ const S = { voice: false, tempVoice: false, speaking: false, status: '', result:
 const win = (w) => w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed();
 const send = (w, ch, ...a) => { if (win(w)) w.webContents.send(ch, ...a); };
 const broadcast = (ch, ...a) => [mainWin, cardWin, fxWin].forEach((w) => send(w, ch, ...a));
-const log = (m) => { console.log('[assistant]', m); send(mainWin, 'log', m); };
+const log = (m) => {
+  console.log('[assistant]', m); send(mainWin, 'log', m);
+  try { const f = path.join(app.getPath('userData'), 'assistant.log'); fs.appendFileSync(f, new Date().toISOString().slice(11, 19) + ' ' + String(m).slice(0, 400) + '\n'); if (fs.statSync(f).size > 300000) fs.writeFileSync(f, ''); } catch { /* logging must never break anything */ }
+};
 const isHypr = () => !!process.env.HYPRLAND_INSTANCE_SIGNATURE && !!which('hyprctl');
 
 // ---------- Hyprland: float/pin the overlay windows without touching the user's config ----------
@@ -163,7 +166,7 @@ function playPcm(pcm, rate) {
 function speak(t) {
   if (!config.get('speak') || !tts.available() || isQuiet()) return Promise.resolve();
   S.speaking = true; micCmd({ cmd: 'mute', on: true });
-  return tts.speak(t, playPcm).catch((e) => log('Voice error: ' + e.message)).finally(() => { S.speaking = false; micCmd({ cmd: 'mute', on: false }); });
+  return tts.speak(t, playPcm).catch((e) => log('Voice error: ' + e.message)).finally(() => { S.speaking = false; setTimeout(() => { if (!S.speaking) micCmd({ cmd: 'mute', on: false }); }, 600); });   // short grace so the room echo of the voice is not heard as a command
 }
 
 const HALLUCINATIONS = /^(ondertitel|ondertiteld|vertaling|bedankt voor het kijken|thanks for watching|subtitles by|untertitel|amara\.org|\.+|ja\.?|you\.?|oké\.?)/i;
@@ -172,11 +175,15 @@ async function onUtterance(buf) {
   if (S.speaking || (!S.voice && !testing)) return;   // a late utterance after the session ended must not start anything (it made the card pop up by itself)
   try {
     const f32 = new Float32Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf);
-    try { fs.writeFileSync(path.join(app.getPath('userData'), 'last-utterance.f32'), Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength)); } catch { /* diagnostics only */ }   // lets recognition problems be reproduced offline
+    try {   // keep the last few recordings so recognition problems can be reproduced offline
+      const dir = path.join(app.getPath('userData'), 'utterances'); fs.mkdirSync(dir, { recursive: true }); const stamp = Date.now();
+      fs.writeFileSync(path.join(dir, stamp + '.f32'), Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength)); for (const old of fs.readdirSync(dir).sort().slice(0, -8)) fs.unlinkSync(path.join(dir, old));
+      let sq = 0; for (let i = 0; i < f32.length; i++) sq += f32[i] * f32[i]; log(`heard ${(f32.length / 16000).toFixed(1)} s, level ${Math.sqrt(sq / f32.length).toFixed(3)} (${stamp}.f32)`);
+    } catch { /* diagnostics only */ }
     if (testing) { const t0 = Date.now(); try { testing({ text: (await stt.transcribe(f32)).trim(), ms: Date.now() - t0 }); } catch (e) { testing({ error: e.message }); } return; }
     S.partial = '…'; pushState();
     let text = await stt.transcribe(f32); S.partial = '';
-    text = fixNames(text, config.names()).trim();
+    log('recognised: ' + text); text = fixNames(text, config.names()).trim();
     if (!text || text.length < 2 || HALLUCINATIONS.test(text)) { pushState(); return; }
     handleText(text, true);
   } catch (e) { log('Speech error: ' + e.message); S.partial = ''; pushState(); }
