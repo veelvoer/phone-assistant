@@ -119,9 +119,9 @@ class DrawOverlay(private val ctx: Context) {
             invalidate()
         }
 
-        override fun onDraw(cv: Canvas) { try { draw(cv) } catch (e: Exception) { Bus.log("draw error: ${e.message}") } }
+        override fun onDraw(cv: Canvas) { try { render(cv) } catch (e: Exception) { Bus.log("draw error: ${e.message}") } }
 
-        private fun draw(cv: Canvas) {
+        private fun render(cv: Canvas) {
             val s = scene ?: return
             val w = width.toFloat(); val h = height.toFloat()
             scrim.alpha = (0x66 * scrimAlpha).toInt(); cv.drawRect(0f, 0f, w, h, scrim)
