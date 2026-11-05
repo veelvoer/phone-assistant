@@ -5,7 +5,7 @@ const path = require('path');
 const DEFAULTS = {
   provider: 'claude', apiKey: '', model: 'claude-haiku-5-5', smartPlan: true,
   hearthUrl: '', hearthKey: '', hearthModel: 'haiku',
-  lang: 'nl', speak: true, loud: 1, voiceName: '', ttsVolume: 100, ttsSpeed: 100, whisperModel: 'medium', sttMigrated: 2,
+  lang: 'nl', speak: true, loud: 1, voiceName: '', ttsVolume: 100, ttsSpeed: 100, whisperModel: 'medium', sttMigrated: 0,
   facts: '', lessons: '', names: '', aliases: '',
   hotkey: 'Ctrl+Alt+Space', hotkeyBound: false, accent: '',
   balance: null, spentSince: 0, spentTotal: 0, spentToday: 0, day: '',
@@ -23,7 +23,7 @@ class Config {
     this.file = file; this.data = { ...DEFAULTS };
     let fresh = true; try { Object.assign(this.data, JSON.parse(fs.readFileSync(file, 'utf8'))); fresh = false; } catch { /* first run */ }
     // speech recognition: the old default (Small) was too error-prone; use the best model the CPU can run comfortably
-    if (fresh || (this.data.sttMigrated || 0) < 2) { this.data.whisperModel = require('os').cpus().length >= 6 ? 'high' : 'medium'; this.data.sttMigrated = 2; }
+    if (fresh || (this.data.sttMigrated || 0) < 3) { this.data.whisperModel = require('os').cpus().length >= 6 ? 'high' : 'medium'; this.data.sttMigrated = 3; }
     this.listeners = new Set();
   }
   get(k) { return this.data[k]; }

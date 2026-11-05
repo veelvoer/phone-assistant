@@ -113,7 +113,7 @@ function hideOverlay() { if (S.drawing) return; if (win(cardWin)) cardWin.hide()
 
 let audioReady = Promise.resolve();
 function createAudio() {
-  audioWin = new BrowserWindow({ show: false, width: 200, height: 100, webPreferences: { ...baseWebPrefs(), autoplayPolicy: 'no-user-gesture-required' } });
+  audioWin = new BrowserWindow({ show: false, width: 200, height: 100, webPreferences: { ...baseWebPrefs(), autoplayPolicy: 'no-user-gesture-required', backgroundThrottling: false } });
   audioReady = new Promise((res) => audioWin.webContents.once('did-finish-load', res));
   audioWin.loadFile(path.join(__dirname, 'renderer', 'audio.html'));
 }
@@ -343,6 +343,7 @@ async function selftest() {
       const t1 = Date.now(); out.ttsReady = await tts.ensure(); out.ttsPrepMs = Date.now() - t1; out.ttsInfo = tts.describe();
       const t2 = Date.now(); await speak('Hallo! Dit is mijn nieuwe stem. Zo klink ik als ik je een antwoord geef.'); out.ttsSpeakMs = Date.now() - t2;
     }
+    if (flag('--selftest-mic')) { out.mic = await new Promise((r) => { S.sttTest = r; stt.start(); micCmd({ cmd: 'start' }); setTimeout(() => r({ timeout: true }), 60000); }); }   // needs a fake capture device (see the wrapper)
     if (flag('--selftest-stt-file')) {
       const buf = fs.readFileSync(process.env.STT_FILE); const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4); const t1 = Date.now();
       out.sttText = await stt.transcribe(f32); out.sttMs = Date.now() - t1; out.sttModel = config.get('whisperModel');

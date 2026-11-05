@@ -4,38 +4,43 @@ let ctx = null, stream = null, proc = null, src = null, muted = false, active = 
 let floor = 0.004, speaking = false, onFrames = 0, silenceMs = 0, speechMs = 0, pre = [], buf = [], lastLevelAt = 0;
 const TARGET = 16000;
 
-function resample(chunk, from) { if (from === TARGET) return chunk; const ratio = from / TARGET, n = Math.floor(chunk.length / ratio), out = new Float32Array(n); for (let i = 0; i < n; i++) { const a = Math.floor(i * ratio), b = Math.min(chunk.length, Math.floor((i + 1) * ratio)); let s = 0; for (let j = a; j < b; j++) s += chunk[j]; out[i] = s / Math.max(1, b - a); } return out; }
+let rAcc = 0, rCnt = 0, rPos = 0;   // box-filter downsampler that keeps its phase between chunks (no samples lost at chunk edges)
+function resample(chunk, from) { if (from === TARGET) return chunk; const ratio = from / TARGET, out = []; for (let i = 0; i < chunk.length; i++) { rAcc += chunk[i]; rCnt++; rPos++; if (rPos >= ratio) { out.push(rAcc / rCnt); rPos -= ratio; rAcc = 0; rCnt = 0; } } return Float32Array.from(out); }
 function join(parts) { let len = 0; for (const p of parts) len += p.length; const o = new Float32Array(len); let off = 0; for (const p of parts) { o.set(p, off); off += p.length; } return o; }
 
+function handle(raw) {
+  if (!active) return; const chunk = resample(raw, ctx.sampleRate); const ms = chunk.length / TARGET * 1000;
+  let sum = 0; for (let i = 0; i < raw.length; i++) sum += raw[i] * raw[i]; const rms = Math.sqrt(sum / raw.length);
+  const now = performance.now(); if (now - lastLevelAt > 80) { lastLevelAt = now; window.api.send('audio:level', muted ? 0 : Math.min(1, rms * 9)); }
+  if (muted) { speaking = false; buf = []; pre = []; onFrames = 0; return; }
+  if (!speaking) floor = Math.max(0.0008, Math.min(0.03, floor * 0.97 + rms * 0.03));
+  const on = Math.max(0.006, floor * 3.0), off = Math.max(0.0035, floor * 1.8);   // hysteresis: soft word endings do not count as silence
+  if (!speaking) {
+    pre.push(chunk); if (pre.length > 6) pre.shift(); onFrames = rms > on ? onFrames + 1 : 0;
+    if (onFrames >= 2) { speaking = true; buf = pre.slice(); silenceMs = 0; speechMs = 0; }
+    return;
+  }
+  buf.push(chunk); if (rms > off) { silenceMs = 0; speechMs += ms; } else silenceMs += ms;
+  const total = buf.reduce((a, c) => a + c.length, 0) / TARGET;
+  if (silenceMs > 900 || total > 28) {
+    speaking = false; onFrames = 0;
+    if (speechMs > 350) { const u = join(buf); window.api.send('audio:utterance', u.buffer); }
+    buf = []; pre = [];
+  }
+}
+
 async function start() {
-  if (active) return; active = true; speaking = false; buf = []; pre = []; silenceMs = 0; speechMs = 0; onFrames = 0;
+  if (active) return; active = true; rAcc = rCnt = rPos = 0; speaking = false; buf = []; pre = []; silenceMs = 0; speechMs = 0; onFrames = 0;
   try {
     // no echo cancellation: the microphone is muted while the assistant talks, and the filter makes soft speech vanish
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: true, autoGainControl: true } });
-    try { ctx = new AudioContext({ sampleRate: TARGET }); } catch { ctx = new AudioContext(); }   // 16 kHz straight from the browser: proper low-pass resampling
-    if (ctx.state === 'suspended') await ctx.resume();
-    src = ctx.createMediaStreamSource(stream); proc = ctx.createScriptProcessor(2048, 1, 1);
-    proc.onaudioprocess = (e) => {
-      if (!active) return; const raw = e.inputBuffer.getChannelData(0); const chunk = resample(new Float32Array(raw), ctx.sampleRate); const ms = chunk.length / TARGET * 1000;
-      let sum = 0; for (let i = 0; i < raw.length; i++) sum += raw[i] * raw[i]; const rms = Math.sqrt(sum / raw.length);
-      const now = performance.now(); if (now - lastLevelAt > 80) { lastLevelAt = now; window.api.send('audio:level', muted ? 0 : Math.min(1, rms * 9)); }
-      if (muted) { speaking = false; buf = []; pre = []; onFrames = 0; return; }
-      if (!speaking) floor = Math.max(0.0008, Math.min(0.03, floor * 0.97 + rms * 0.03));
-      const on = Math.max(0.006, floor * 3.0), off = Math.max(0.0035, floor * 1.8);   // hysteresis: soft word endings do not count as silence
-      if (!speaking) {
-        pre.push(chunk); if (pre.length > 6) pre.shift(); onFrames = rms > on ? onFrames + 1 : 0;
-        if (onFrames >= 2) { speaking = true; buf = pre.slice(); silenceMs = 0; speechMs = 0; }
-        return;
-      }
-      buf.push(chunk); if (rms > off) { silenceMs = 0; speechMs += ms; } else silenceMs += ms;
-      const total = buf.reduce((a, c) => a + c.length, 0) / TARGET;
-      if (silenceMs > 900 || total > 28) {
-        speaking = false; onFrames = 0;
-        if (speechMs > 350) { const u = join(buf); window.api.send('audio:utterance', u.buffer); }
-        buf = []; pre = [];
-      }
-    };
-    src.connect(proc); proc.connect(ctx.destination);
+    ctx = new AudioContext(); if (ctx.state === 'suspended') await ctx.resume();   // the device's own rate; we downsample ourselves
+    src = ctx.createMediaStreamSource(stream);
+    try {
+      await ctx.audioWorklet.addModule('mic-worklet.js'); proc = new AudioWorkletNode(ctx, 'mic', { numberOfOutputs: 0 }); proc.port.onmessage = (e) => handle(e.data); src.connect(proc);
+    } catch {
+      proc = ctx.createScriptProcessor(4096, 1, 1); proc.onaudioprocess = (e) => handle(new Float32Array(e.inputBuffer.getChannelData(0))); src.connect(proc); proc.connect(ctx.destination);
+    }
   } catch (e) { active = false; window.api.send('audio:error', e && e.message ? e.message : String(e)); }
 }
 function stop() { active = false; try { if (proc) proc.disconnect(); if (src) src.disconnect(); if (stream) stream.getTracks().forEach((t) => t.stop()); if (ctx) ctx.close(); } catch { /* ignore */ } proc = src = stream = ctx = null; buf = []; pre = []; }
