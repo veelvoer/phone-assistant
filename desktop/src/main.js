@@ -205,7 +205,7 @@ function registerIpc() {
     if ('accent' in patch) { theme = await detectAccent({ systemPreferences }, config.get('accent')); broadcast('theme', theme, nativeTheme.shouldUseDarkColors); }
     if ('hotkey' in patch) { registerHotkey(); if (isHypr() && patch.hotkey) { const r = await bindHypr(patch.hotkey); if (r !== 'ok') broadcast('toast', 'Could not bind in Hyprland: ' + r); } }
     if ('balance' in patch) usage.setBalance(patch.balance);
-    if ('whisperModel' in patch || 'lang' in patch) { if (stt.worker) { stt.stop(); } }
+    if ('whisperModel' in patch || 'lang' in patch || 'groqKey' in patch) { if (stt.worker) { stt.stop(); } }
     if ('voiceName' in patch || 'lang' in patch) tts.ensure().then(() => send(mainWin, 'tts', { info: tts.describe(), ready: tts.ready() }));
     if (['cardPos', 'cardSize', 'cardOpacity', 'cardRadius', 'showBars', 'showProgress', 'glowOn', 'glowWidth', 'glowIntensity', 'glowSpeed', 'overlay', 'glowMode', 'glowSoft', 'glowRadius', 'accent2', 'cardOn', 'cardStyle', 'cardText', 'cardOffset', 'showTitle', 'anim', 'waveStyle', 'waveCount', 'accent'].some((k) => k in patch)) { S.previewUntil = Date.now() + 4500; await showCard(false); if (config.get('overlay')) await showFx(); pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }
     broadcast('usage', usage.summary()); return true;

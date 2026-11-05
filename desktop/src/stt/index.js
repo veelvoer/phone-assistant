@@ -18,7 +18,8 @@ class Stt extends EventEmitter {
   /** The recogniser holds ~1.5 GB, so it only lives while it is being used: it is stopped again after a quiet spell. */
   touch() { clearTimeout(this.idle); this.idle = setTimeout(() => this.stop(), 90000); if (this.idle.unref) this.idle.unref(); }
 
-  start() {
+  start(force) {
+    if (!force && String(this.config.get('groqKey') || '').trim()) return;   // online recognition is on: do not hold 1.5 GB for a model that is only a fallback
     this.touch();
     if (this.worker) return;
     if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) { this.prepare().then(() => this.start()).catch(() => {}); return; }
@@ -54,7 +55,7 @@ class Stt extends EventEmitter {
   async transcribe(float32) {
     const online = await this.cloud(float32); if (online !== null) return online;
     if (!models.isReady(this.config.get('whisperModel'), this.cacheDir)) await this.prepare();
-    this.start(); this.touch();
+    this.start(true); this.touch();
     return new Promise((res, rej) => { const id = ++this.seq; this.pending.set(id, { res, rej }); this.worker.send({ type: 'transcribe', id, audio: float32, model: this.config.get('whisperModel'), language: process.env.STT_LANG === 'auto' ? undefined : this.language() }); });
   }
   stop() { clearTimeout(this.idle); if (this.worker) { const w = this.worker; this.worker = null; this.ready = false; w.kill(); } }

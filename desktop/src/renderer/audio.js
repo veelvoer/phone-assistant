@@ -1,7 +1,7 @@
 // Audio window: microphone capture with a voice-activity detector (finished utterances go to speech recognition as 16 kHz mono float32),
 // plus playback of the assistant's voice and the little UI chimes.
 let ctx = null, stream = null, proc = null, src = null, muted = false, active = false;
-let floor = 0.004, speaking = false, onFrames = 0, silenceMs = 0, speechMs = 0, pre = [], buf = [], lastLevelAt = 0;
+let lvl = 0, floor = 0.004, speaking = false, onFrames = 0, silenceMs = 0, speechMs = 0, pre = [], buf = [], lastLevelAt = 0;
 const TARGET = 16000;
 
 let rAcc = 0, rCnt = 0, rPos = 0;   // box-filter downsampler that keeps its phase between chunks (no samples lost at chunk edges)
@@ -17,10 +17,11 @@ function handle(raw) {
   const on = Math.max(0.006, floor * 3.0), off = Math.max(0.0035, floor * 1.8);   // hysteresis: soft word endings do not count as silence
   if (!speaking) {
     pre.push(chunk); if (pre.length > 6) pre.shift(); onFrames = rms > on ? onFrames + 1 : 0;
-    if (onFrames >= 2) { speaking = true; buf = pre.slice(); silenceMs = 0; speechMs = 0; }
+    if (onFrames >= 2) { speaking = true; buf = pre.slice(); silenceMs = 0; speechMs = 0; lvl = rms; }
     return;
   }
-  buf.push(chunk); if (rms > off) { silenceMs = 0; speechMs += ms; } else silenceMs += ms;
+  lvl = Math.max(lvl * 0.995, rms); const quiet = Math.max(off, lvl * 0.22);   // relative to how loudly they speak, so steady background noise (fan, music) does not keep the recording open forever
+  buf.push(chunk); if (rms > quiet) { silenceMs = 0; speechMs += ms; } else silenceMs += ms;
   const total = buf.reduce((a, c) => a + c.length, 0) / TARGET;
   if (silenceMs > 1100 || total > 28) {
     speaking = false; onFrames = 0;
