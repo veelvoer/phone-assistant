@@ -1144,13 +1144,16 @@ class AgentService : AccessibilityService() {
     }
 
     private var board: DrawOverlay? = null
+    internal var narrate = true   // tests switch this off so the draw tool does not wait for speech
     private fun drawBoard(i: JSONObject): String {
         val arr = i.optJSONArray("frames") ?: return "error: frames missing"
         val fs = ArrayList<DrawOverlay.Frame>()
         for (k in 0 until minOf(arr.length(), 6)) { val o = arr.optJSONObject(k) ?: continue; val svg = Svg.sanitize(o.optString("svg")); if (svg.isNotEmpty()) fs.add(DrawOverlay.Frame(svg, o.optString("caption").take(300), o.optString("say").ifBlank { o.optString("caption") }.take(500))) }
         if (fs.isEmpty()) return "error: no valid SVG (it must start with <svg viewBox=\"0 0 800 500\"> and use only shapes and text)"
         // draw and talk at the same time, frame by frame; this runs on the agent thread so it can wait for the speech
-        val title = i.optString("title").take(80); val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val title = i.optString("title").take(80)
+        if (!narrate) { main.post { (board ?: DrawOverlay(this).also { board = it }).show(title, fs) }; return "drew ${fs.size} frame(s)" }
+        val closed = java.util.concurrent.atomic.AtomicBoolean(false)
         main.post { (board ?: DrawOverlay(this).also { board = it }).onClosed = { closed.set(true); main.post { stopPlayback() } } }
         for ((n, f) in fs.withIndex()) {
             if (closed.get()) break

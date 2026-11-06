@@ -27,10 +27,10 @@ class ServiceTest {
     }
 
     @Test fun drawToolAcceptsSvgAndRejectsGarbage() {
-        val s = service()
+        val s = service(); s.narrate = false
         val m = AgentService::class.java.getDeclaredMethod("drawBoard", JSONObject::class.java).apply { isAccessible = true }
         val ok = JSONObject().put("title", "DNS").put("frames", JSONArray().put(JSONObject().put("svg", "<svg viewBox=\"0 0 800 500\"><rect x=\"10\" y=\"10\" width=\"100\" height=\"50\" stroke=\"#fff\" fill=\"none\"/></svg>").put("caption", "Stap 1")))
-        assertTrue((m.invoke(s, ok) as String).startsWith("drawing"))
+        assertTrue((m.invoke(s, ok) as String).startsWith("drew"))
         shadowOf(android.os.Looper.getMainLooper()).idle()
         val bad = JSONObject().put("title", "x").put("frames", JSONArray().put(JSONObject().put("svg", "nope")))
         assertTrue((m.invoke(s, bad) as String).startsWith("error"))
