@@ -440,7 +440,7 @@ class AgentService : AccessibilityService() {
         try {
             stopPlayback()
             val mp = android.media.MediaPlayer()
-            mp.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(if (callMode) android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION else android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            mp.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(if (callMode && pref().getBoolean("call_voice_stream", false)) android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION else android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
             mp.setDataSource(f.path); mp.prepare()
             if (gainMb() > 0) { try { enhancer?.release(); enhancer = android.media.audiofx.LoudnessEnhancer(mp.audioSessionId).apply { setTargetGain(gainMb()); enabled = true } } catch (x: Exception) { } }
             mp.setOnCompletionListener { main.post { f.delete(); endSpeech() } }

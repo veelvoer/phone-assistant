@@ -269,6 +269,7 @@ class SettingsActivity : Activity() {
                 build()
             }, sub("Silent: when you don't pick up, it declines the call and chats with the caller by text (SMS, WhatsApp, Telegram…), then tells you what it was about. Talk: it answers on the loudspeaker; Android gives apps no access to call audio, so this is not silent and may fall back to texting. It always says it's your AI assistant.")))
             if (!on) return
+            body.addView(ui.card(ui.toggleRow("Talk mode: play on the call stream", "Off (default): the voice plays like music, which the phone's echo cancellation usually leaves alone so the caller can hear it. Turn on only if that doesn't work for you.", p.getBoolean("call_voice_stream", false)) { v -> p.edit().putBoolean("call_voice_stream", v).apply() }))
             val missing = CallManager.missingPermissions(this)
             val status = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             fun statusRow(ok: Boolean, text: String, actionLabel: String, action: () -> Unit) = LinearLayout(this).apply {
