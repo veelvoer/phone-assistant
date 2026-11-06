@@ -144,6 +144,14 @@ class SvgScene(svg: String) {
         totalMs = t + 300L
     }
 
+    /** Stretch the timeline so the drawing lasts about as long as the narration. */
+    fun stretch(targetMs: Long) {
+        if (totalMs <= 0) return
+        val k = (targetMs.toFloat() / totalMs).coerceIn(0.7f, 4f)
+        for (s in shapes) when (s) { is Shape -> { s.start = (s.start * k).toLong(); s.dur = (s.dur * k).toLong() }; is Label -> { s.start = (s.start * k).toLong(); s.dur = (s.dur * k).toLong() } }
+        totalMs = (totalMs * k).toLong()
+    }
+
     // must stay below the property initialisers above (NAMED…): Kotlin runs them in textual order
     init { try { parse(svg) } catch (e: Exception) { error = e.toString() + " @ " + e.stackTrace.take(3).joinToString { it.toString() } } ; schedule() }
 }

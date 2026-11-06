@@ -242,7 +242,8 @@ function registerIpc() {
   ipcMain.on('audio:error', (_e, m) => { log('Microphone: ' + m); S.partial = ''; broadcast('toast', 'Microphone: ' + m); });
   ipcMain.on('card:height', async (_e, h) => { if (win(cardWin)) { const m = await focusedMonitor(); S.cardH = Math.round(h); cardWin.setBounds(cardGeo(m, S.cardH)); } });
   ipcMain.on('draw:status', (_e, d) => { S.drawing = !!d; send(cardWin, 'draw:status', d); pushState(); });
-  ipcMain.on('draw:ctl', (_e, c) => send(fxWin, 'draw:ctl', c));
+  ipcMain.on('draw:ctl', (_e, c) => { if (c === 'close' || c === 'skip') { S.drawAbort = true; tts.stop(); send(audioWin, 'audio:cmd', { cmd: 'stopplay' }); if (S.drawWait) S.drawWait(); } send(fxWin, 'draw:ctl', c); });
+  ipcMain.on('draw:framedone', () => { if (S.drawWait) S.drawWait(); });
   ipcMain.handle('look:preset', (_e, name) => { config.set(PRESETS[name] || {}); S.previewUntil = Date.now() + 4500; showCard(false).then(() => showFx()).then(() => { pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }); return config.all(); });
   ipcMain.handle('look:reset', () => { config.set(LOOK_DEFAULTS()); S.previewUntil = Date.now() + 4500; showCard(false).then(() => showFx()).then(() => pushState()); return config.all(); });
   ipcMain.handle('ui:preview', () => { S.previewUntil = Date.now() + 4500; showCard(false).then(() => (config.get('overlay') ? showFx() : null)).then(() => { pushState(); setTimeout(() => { pushState(); if (!agent.running && !S.voice && !S.keepCard) hideOverlay(); }, 4700); }); return true; });
@@ -309,7 +310,18 @@ app.whenReady().then(async () => {
   agent.on('usage', (u) => broadcast('usage', u));
   agent.on('asking', async (q) => { S.asking = q; if (!S.cardVisible) await showCard(true); await showFx(); if (!S.voice) startVoice(true); pushState(); });
   agent.on('result', (m) => { S.result = m; S.resultUntil = Date.now() + holdMs(); pushState(); setTimeout(pushState, holdMs() + 200); chime(/^(Error|Gestopt|Stopped)/i.test(m) ? 'error' : 'done'); });
-  agent.on('draw', async (d) => { S.drawing = true; await showFx(true); await showCard(false); send(fxWin, 'draw', { title: d.title, frames: d.frames }); });
+  agent.on('draw', async (d) => {   // draw and talk at the same time, frame by frame
+    S.drawing = true; await showFx(true); await showCard(false); S.drawAbort = false;
+    try {
+      for (let i = 0; i < d.frames.length && !S.drawAbort; i++) {
+        const f = d.frames[i], say = f.say || f.caption || '', target = Math.max(2500, Math.min(30000, say.length * 62));
+        const drawn = new Promise((res) => { S.drawWait = res; setTimeout(res, target + 15000); }); send(fxWin, 'draw:frame', { i, n: d.frames.length, title: d.title, frame: f, target });
+        await Promise.all([say ? speak(say) : Promise.resolve(), drawn]); S.drawWait = null;
+        if (!S.drawAbort) await new Promise((r) => setTimeout(r, 700));
+      }
+      if (!S.drawAbort) await new Promise((r) => setTimeout(r, 2500));
+    } finally { send(fxWin, 'draw:ctl', 'close'); S.drawing = false; S.drawWait = null; pushState(); if (d.done) d.done(); }
+  });
   agent.on('highlight', (d) => { const b = win(fxWin) ? fxWin.getBounds() : { x: 0, y: 0 }; send(fxWin, 'highlight', { seconds: d.seconds, items: d.items.map((i) => ({ ...i, x: i.x - b.x, y: i.y - b.y })) }); });
   agent.on('facts', () => send(mainWin, 'facts', config.facts()));
   agent.on('end', () => { S.asking = ''; S.status = ''; send(mainWin, 'plan', agent.state); pushState(); setTimeout(pushState, holdMs() + 200); if (!S.voice && !S.keepCard) setTimeout(() => { if (!agent.running && !S.voice && !(S.previewUntil > Date.now())) hideOverlay(); }, holdMs() + 400); });
@@ -343,8 +355,8 @@ async function selftest() {
     if (flag('--selftest-draw')) {
       const svg = (b) => `<svg viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">${b}</svg>`;
       const demo = svg('<rect x="40" y="170" width="170" height="90" rx="14" fill="#e8f0ff" stroke="#1d4ed8" stroke-width="3"/><text x="125" y="222" font-size="26" text-anchor="middle" fill="#111">Jouw pc</text><line x1="210" y1="215" x2="330" y2="215" stroke="#111" stroke-width="3" marker-end="url(#a)"/><rect x="330" y="170" width="170" height="90" rx="14" fill="#fff3e0" stroke="#ea580c" stroke-width="3"/><text x="415" y="222" font-size="26" text-anchor="middle" fill="#111">DNS-server</text><path d="M500 215 C560 215 560 360 620 360" fill="none" stroke="#111" stroke-width="3" marker-end="url(#a)"/><circle cx="690" cy="360" r="60" fill="#dcfce7" stroke="#16a34a" stroke-width="3"/><text x="690" y="368" font-size="24" text-anchor="middle" fill="#111">93.184.216.34</text><text x="415" y="150" font-size="22" text-anchor="middle" fill="#444">wat is het adres van example.com?</text><defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#111"/></marker></defs>');
-      await new Promise((r) => setTimeout(r, 500)); agent.emit('draw', { title: 'Hoe DNS werkt', frames: [{ svg: require('./svg').sanitizeSvg(demo), caption: 'Je pc vraagt de DNS-server naar het adres van de website.' }] });
-      for (const t of [1800, 4200, 7500, 11000]) { await new Promise((r) => setTimeout(r, t - (out.lastT || 0))); out.lastT = t; const sh = await platform.screenshot(); fs.writeFileSync(`/tmp/draw-${t}.png`, sh.png); }
+      await new Promise((r) => setTimeout(r, 500)); agent.emit('draw', { title: 'Hoe DNS werkt', frames: [{ svg: require('./svg').sanitizeSvg(demo), caption: 'Je pc vraagt de DNS-server naar het adres van de website.', say: 'Kijk, als jij een website opent, vraagt je pc eerst aan de DNS-server wat het adres is. Die antwoordt met een reeks cijfers, en daarmee kan je pc de site vinden.' }], done: () => { out.drawDone = Date.now() - out.t0d; } }); out.t0d = Date.now();
+      for (const t of [1800, 4200, 7500, 11000, 15000]) { await new Promise((r) => setTimeout(r, t - (out.lastT || 0))); out.lastT = t; const sh = await platform.screenshot(); fs.writeFileSync(`/tmp/draw-${t}.png`, sh.png); }
     }
     if (flag('--selftest-tts')) {
       const t1 = Date.now(); out.ttsReady = await tts.ensure(); out.ttsPrepMs = Date.now() - t1; out.ttsInfo = tts.describe();

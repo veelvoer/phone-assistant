@@ -20,7 +20,7 @@ import kotlin.math.min
  * following the pen, then the caption fades in. A small bar lets you step through frames or close it.
  */
 class DrawOverlay(private val ctx: Context) {
-    class Frame(val svg: String, val caption: String)
+    class Frame(val svg: String, val caption: String, val say: String = "")
 
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val ui = Ui(ctx)
@@ -39,8 +39,22 @@ class DrawOverlay(private val ctx: Context) {
     private fun accent(): Int { val a = ctx.getSharedPreferences("p", Context.MODE_PRIVATE).getInt("ov_accent", 0); return if (a != 0) a else pal.a300 }
     private fun hold(): Long = (ctx.getSharedPreferences("p", Context.MODE_PRIVATE).getFloat("ov_hold", 4.5f) * 1000).toLong().coerceAtLeast(2500L)
 
-    fun show(t: String, f: List<Frame>) {
-        hide(); frames = f; idx = 0; auto = true; title = t
+    /** Called when the user closes the drawing (so the narration stops too). */
+    var onClosed: (() -> Unit)? = null
+    private var liveCap = false
+    private fun capAt(s: SvgScene) = if (liveCap) 500L else s.totalMs - 200
+
+    /** One narrated frame: the drawing is stretched to last as long as the speech; done() fires when the pen is finished. */
+    fun live(t: String, f: Frame, i: Int, n: Int, targetMs: Long, done: () -> Unit) {
+        if (canvasView == null) show(t, listOf(f), true)
+        handler.removeCallbacks(nextRun); handler.removeCallbacks(closeRun)
+        liveCap = true; frames = listOf(f); idx = 0; title = t; counter?.text = "${i + 1} / $n"
+        val s = SvgScene(f.svg); s.stretch(targetMs)
+        canvasView?.play(s, if (i == 0 && t.isNotBlank()) t else "", f.caption, accent()) { done() }
+    }
+
+    fun show(t: String, f: List<Frame>, live: Boolean = false) {
+        hide(); liveCap = live; frames = f; idx = 0; auto = true; title = t
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         val b = wm.maximumWindowMetrics.bounds
         val v = Canvas2(ctx).also { canvasView = it }
@@ -58,7 +72,7 @@ class DrawOverlay(private val ctx: Context) {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; y = ui.dp(34); layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS })
         bar.alpha = 0f; bar.animate().alpha(1f).setDuration(250).start()
         v.fadeIn()
-        go(0)
+        if (!live) go(0)
     }
 
     private fun go(n: Int) {
@@ -76,6 +90,7 @@ class DrawOverlay(private val ctx: Context) {
     private fun scheduleClose() { handler.removeCallbacks(closeRun); handler.postDelayed(closeRun, hold() * 2) }
 
     fun hide() {
+        if (canvasView != null) { val cb = onClosed; onClosed = null; cb?.invoke() }   // only a real close, not the reset at the start of show()
         handler.removeCallbacks(nextRun); handler.removeCallbacks(closeRun)
         val v = canvasView; val c = controls; canvasView = null; controls = null
         v?.let { it.stop(); it.animate().alpha(0f).setDuration(220).withEndAction { runCatching { wm.removeView(it) } }.start() }
@@ -159,8 +174,8 @@ class DrawOverlay(private val ctx: Context) {
             cv.restore()
             // heading + caption in screen space
             if (heading.isNotBlank() && t > 100) { textP.textSize = 22f * d; textP.color = Color.WHITE; textP.textAlign = Paint.Align.CENTER; textP.setShadowLayer(6f, 0f, 2f, 0xCC000000.toInt()); cv.drawText(heading, w / 2f, h * 0.46f - s.vbH * sc / 2f - 18f * d, textP) }
-            if (caption.isNotBlank() && t > s.totalMs - 200) {
-                val a = ((t - (s.totalMs - 200)) / 400f).coerceIn(0f, 1f)
+            if (caption.isNotBlank() && t > capAt(s)) {
+                val a = ((t - capAt(s)) / 400f).coerceIn(0f, 1f)
                 textP.textSize = 18f * d; textP.color = Color.WHITE; textP.alpha = (255 * a).toInt(); textP.textAlign = Paint.Align.LEFT; textP.setShadowLayer(6f, 0f, 2f, 0xCC000000.toInt())
                 val lay = StaticLayout.Builder.obtain(caption, 0, caption.length, textP, (w * 0.84f).toInt()).setAlignment(Layout.Alignment.ALIGN_CENTER).setMaxLines(4).setEllipsize(android.text.TextUtils.TruncateAt.END).build()
                 cv.save(); cv.translate(w * 0.08f, h * 0.46f + s.vbH * sc / 2f + 22f * d); lay.draw(cv); cv.restore()

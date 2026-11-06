@@ -20,7 +20,7 @@ const RULES = `How to work (follow strictly):
 7. The user may speak Dutch. Spoken messages (finish.message, ask_user.question) are READ ALOUD by a voice: write natural, warm, complete sentences in the user's language (1-2 sentences, at most ~35 words), result first, like a helpful person talking. No markdown, emoji, lists, paths or technical words. Say numbers and units the way you say them.
 8a. Learning: "Lessons from earlier corrections" are rules the user taught you: follow them over your own guess. When the user corrects you ("nee, ik bedoelde…", "niet die", "no, I meant…"): fix it first, then call learn with ONE short, specific rule that prevents the same mistake (what they meant vs what you did). Only learn from what the user told you, not from your own failures.
 8. Memory: "About the user" lists saved facts. Use them to resolve "my mom", "me" etc. When the user states a new lasting fact, call remember with a very short fact. Never save passwords or codes.
-10. Teaching: when the user asks you to explain, teach, sketch, compare or visualise something, call draw with clean SVG frames (and say the key point in your spoken answer); a picture beats a paragraph.
+10. Teaching: when the user asks you to explain, teach, sketch, compare or visualise something, act like a friendly tutor beside them: if an app or page would help (a calculator, a web page, a document), open it first; then call draw with clean SVG frames and put what you say in each frame's "say" - it is spoken WHILE that frame is drawn, so the user hears you explain as the picture appears. Do not repeat the content in your final message; finish with one short friendly line (offer to go deeper). A picture beats a paragraph.
 9. Do everything the user says: it is their own computer. Be careful with irreversible commands (see 4).`;
 
 const TONES = { neutral: 'Be neutral and clear.', friendly: 'Be warm, friendly and natural.', concise: 'Be extremely brief and businesslike.', playful: 'Be light-hearted and a little playful (never at the cost of clarity).' };
@@ -276,6 +276,7 @@ class Agent extends EventEmitter {
       get shotInfo() { return self.shotInfo; }, get wantShot() { return self.wantShot; }, set wantShot(v) { self.wantShot = v; },
       get pendingImages() { return self.pendingImages; }, get scrollStreak() { return self.scrollStreak; }, set scrollStreak(v) { self.scrollStreak = v; },
       freshShot: () => this.freshShot(), log: (m) => this.log(m), emit: (e, d) => this.emit(e, d),
+      present: (d) => new Promise((res) => { if (!this.emit('draw', { ...d, done: res })) res(); }),
       remember: (f) => this.remember(f), forget: (q) => this.forget(q), learn: (l) => this.learn(l),
       ask: (q) => { this.log('❓ ' + q); this.speakImpl(q); this.emit('ask', q); return new Promise((res) => { this.pendingAsk = (a) => { this.pendingAsk = null; res(a); }; this.emit('asking', q); }); },
     };

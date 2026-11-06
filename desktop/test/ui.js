@@ -64,6 +64,11 @@ async function run() {
   assert.notStrictEqual(rect.getAttribute('stroke'), '#000', 'dark colours are lifted for the dimmed screen'); assert.ok(f.d.querySelector('#sv line').getAttribute('marker-end'), 'arrowhead appears when the line is done');
   assert.ok(f.calls.some((x) => x[0] === 'send' && x[1] === 'draw:status' && x[2] && x[2].n === 2));
   f.emit('draw:ctl', 'next'); assert.ok(f.d.querySelector('#sv circle'), 'next frame'); f.emit('draw:ctl', 'close'); assert.ok(!f.d.getElementById('draw').classList.contains('on'));
+  { // live narrated frame: drawing is stretched to the narration and reports back when finished
+    f.emit('draw:frame', { i: 0, n: 1, title: 'Live', target: 1200, frame: { svg: sanitizeSvg('<svg viewBox="0 0 800 500"><rect x="10" y="10" width="100" height="50" fill="#222" stroke="#000"/></svg>'), caption: 'c', say: 's' } });
+    assert.ok(f.w.__fx.D.live && f.w.__fx.D.total >= 840, 'timeline stretched to the narration'); f.w.__fx.tick(performance.now() + 5000);
+    assert.ok(f.d.getElementById('dcap').style.opacity === '1', 'caption shown'); f.emit('draw:ctl', 'close'); assert.ok(!f.w.__fx.D.live, 'live mode ends on close');
+  }
   assert.deepStrictEqual(f.errors, [], 'no script errors in the fx window');
   // card: drawing controls + styles
   const c2 = await load('card.html'); c2.emit('draw:status', { i: 0, n: 3 }); assert.strictEqual(c2.d.getElementById('dctl').hidden, false); c2.d.getElementById('dnext').click(); assert.ok(c2.calls.some((x) => x[1] === 'draw:ctl' && x[2] === 'next'));

@@ -62,7 +62,8 @@ function build(frame) {
     if (len > 0) { el.style.strokeDasharray = len; el.style.strokeDashoffset = len; } el.style.fillOpacity = 0;
     items.push({ el, kind: 'shape', len, start: at, dur, sCol, fCol, marker }); at += dur + (fCol ? 180 : 0) + 50;
   }
-  D.items = items; D.total = at + 300; return true;
+  const k = D.target ? Math.max(0.7, Math.min(4, D.target / (at + 300))) : 1; for (const it of items) { it.start *= k; it.dur *= k; }   // stretch the drawing to last as long as the narration
+  D.items = items; D.total = (at + 300) * k; return true;
 }
 function place(el, len, p) {   // pen cursor position for a point along a shape
   try { const svg = el.ownerSVGElement; const pt = svg.createSVGPoint(); const q = el.getPointAtLength(len * p); pt.x = q.x; pt.y = q.y; const s = pt.matrixTransform(el.getScreenCTM()); const c = $('dot'); c.style.left = s.x + 'px'; c.style.top = s.y + 'px'; c.style.opacity = 1; } catch { /* no geometry (tests) */ }
@@ -77,7 +78,8 @@ function tick(now) {
     else { if (it.len > 0) place(it.el, it.len, p); head = it; }
   }
   if (!head && tt > D.total - 300) $('dot').style.opacity = 0;
-  if (tt > D.total - 200) $('dcap').style.opacity = 1;
+  if (tt > (D.target ? 500 : D.total - 200)) $('dcap').style.opacity = 1;
+  if (D.live) { if (tt > D.total + 100 && !D.fired) { D.fired = true; window.api.send('draw:framedone'); } if (tt <= D.total + 400) D.raf = requestAnimationFrame(() => tick(performance.now())); return; }
   if (tt > D.total + 350 && !D.fired) { D.fired = true; const f = D.frames[D.i]; D.timer = setTimeout(() => { if (D.auto && D.i < D.frames.length - 1) play(D.i + 1); else D.timer = setTimeout(stopDraw, (style.hold || 5) * 2000); }, (style.hold || 5) * 1000 + (f.caption || '').length * 45); }
   if (tt <= D.total + 400) D.raf = requestAnimationFrame(() => tick(performance.now()));
 }
@@ -87,7 +89,8 @@ function play(i) {
   const ac = window.__accent && window.__accent.accent; if (ac) $('draw').style.setProperty('--ca', ac);
   D.t0 = performance.now(); window.api.send('draw:status', { i: D.i, n: D.frames.length }); D.raf = requestAnimationFrame(() => tick(performance.now()));
 }
-function stopDraw() { cancelAnimationFrame(D.raf); clearTimeout(D.timer); $('draw').classList.remove('on'); setTimeout(() => { if (!$('draw').classList.contains('on')) $('sv').innerHTML = ''; }, 400); D.frames = []; window.api.send('draw:status', null); }
-window.api.on('draw', (d) => { D.frames = d.frames || []; D.title = d.title || ''; D.auto = true; if (D.frames.length) play(0); });
-window.api.on('draw:ctl', (c) => { if (!D.frames.length) return; if (c === 'close') return stopDraw(); D.auto = false; if (c === 'finish') { D.t0 = performance.now() - D.total; tick(performance.now()); return; } play(D.i + (c === 'next' ? 1 : -1)); });
+function stopDraw() { D.live = false; D.target = 0; cancelAnimationFrame(D.raf); clearTimeout(D.timer); $('draw').classList.remove('on'); setTimeout(() => { if (!$('draw').classList.contains('on')) $('sv').innerHTML = ''; }, 400); D.frames = []; window.api.send('draw:status', null); }
+window.api.on('draw', (d) => { D.live = false; D.target = 0; D.frames = d.frames || []; D.title = d.title || ''; D.auto = true; if (D.frames.length) play(0); });
+window.api.on('draw:frame', (m) => { D.live = true; D.target = m.target; D.title = m.title || ''; D.frames = []; D.frames[m.i] = m.frame; D.frames.length = m.n; D.auto = false; play(m.i); });
+window.api.on('draw:ctl', (c) => { if (D.live && c !== 'close') return; if (!D.frames.length) return; if (c === 'close') return stopDraw(); D.auto = false; if (c === 'finish') { D.t0 = performance.now() - D.total; tick(performance.now()); return; } play(D.i + (c === 'next' ? 1 : -1)); });
 window.__fx = { tick, D, play, build, adapt };   // test hooks
