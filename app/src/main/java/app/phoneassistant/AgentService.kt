@@ -326,7 +326,8 @@ class AgentService : AccessibilityService() {
             override fun onError(error: Int) {
                 partial = ""
                 if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) { refreshOverlay(); again(150); return }
-                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || ++errStreak >= 6) { Bus.log("Voice stopped: recognizer error $error"); endSession(false); return }
+                Bus.log("Recognizer error $error (try ${errStreak + 1})")
+                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || ++errStreak >= 9) { Bus.log("Voice stopped: recognizer error $error"); endSession(false); return }
                 again(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 800 else 400)
             }
             override fun onReadyForSpeech(p: Bundle?) {}
@@ -339,10 +340,10 @@ class AgentService : AccessibilityService() {
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true).putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, sttMaxResults())
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, sttSilenceMs())
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, sttSilenceMs())
-            .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, pref().getBoolean("stt_offline", false))
+            .apply { if (errStreak < 2) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, pref().getBoolean("stt_offline", false)) }   // after repeated errors fall back step by step: no offline preference, no biasing, no language hints
         val lang = getSharedPreferences("p", MODE_PRIVATE).getString("lang", "nl-BE").orEmpty()
-        names().takeIf { it.isNotEmpty() }?.let { i.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(it)) }
-        if (lang.isNotEmpty()) i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang).putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
+        if (errStreak < 4) names().takeIf { it.isNotEmpty() }?.let { i.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(it)) }
+        if (lang.isNotEmpty() && errStreak < 6) i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang).putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
         r.startListening(i)
     }
 
