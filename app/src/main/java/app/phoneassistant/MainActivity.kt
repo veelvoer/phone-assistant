@@ -187,6 +187,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (Protect.paused(this)) Protect.resume(this)
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 2)
         Bus.listener = { runOnUiThread { render() } }
         render(); Updater.check(this)

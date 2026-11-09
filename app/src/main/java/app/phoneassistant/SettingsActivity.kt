@@ -119,7 +119,7 @@ class SettingsActivity : Activity() {
         }
         val provider = ui.segmented(listOf("Claude API", "Hearth"), if (hearth) 1 else 0) { i -> runHooks(); hearth = i == 1; p.edit().putBoolean("hearth", hearth).apply(); build() }
         build()
-        add(root, group("Provider", provider, box), group("Limits", label("Max cost per task ($)"), numField("0.30", "cost_cap", 0.30f), sub("It stops a task that costs more than this.")))
+        add(root, group("Provider", provider, box), group("Banking apps", bool("Switch off for banking apps", "KBC Mobile and other banking apps refuse to open while an accessibility service is on. The assistant switches itself off when one opens; tap the Assistant tile or open this app to switch it back on.", "pause_banking", true), field("Extra apps (package names, comma separated)", "pause_apps"), sub(if (Protect.canSwitchOn(this)) "One-tap switching back on: ready." else "For one-tap switching back on, run once on a computer with the phone connected: " + Protect.adbCommand(this) + " (otherwise turn it on again in Android's accessibility settings).")), group("Limits", label("Max cost per task ($)"), numField("0.30", "cost_cap", 0.30f), sub("It stops a task that costs more than this.")))
     }
 
     // ---------------- Voice ----------------

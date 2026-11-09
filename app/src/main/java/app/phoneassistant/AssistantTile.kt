@@ -11,6 +11,7 @@ class AssistantTile : TileService() {
     override fun onStartListening() { qsTile?.apply { state = Tile.STATE_INACTIVE; label = "Assistant"; updateTile() } }
 
     override fun onClick() {
+        if (AgentService.instance == null && Protect.paused(this) && Protect.resume(this)) { android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ AgentService.instance?.toggleFromUi(true) }, 1200); return }
         val svc = AgentService.instance
         if (svc != null) { svc.toggleFromUi(true); return }
         val i = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

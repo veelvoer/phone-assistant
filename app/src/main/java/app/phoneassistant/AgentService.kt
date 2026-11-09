@@ -105,7 +105,14 @@ class AgentService : AccessibilityService() {
         })
     }
     @Volatile private var lastEvent = 0L
-    override fun onAccessibilityEvent(e: AccessibilityEvent?) { lastEvent = android.os.SystemClock.uptimeMillis() }
+    override fun onAccessibilityEvent(e: AccessibilityEvent?) {
+        lastEvent = android.os.SystemClock.uptimeMillis()
+        // a banking app came to the front: switch off so it does not block itself (switch back on from the tile or the app)
+        if (e != null && e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && Protect.enabled(this) && Protect.isProtected(this, e.packageName?.toString())) {
+            Bus.log("Banking app in front (${e.packageName}): assistant switched off for it")
+            Protect.markPaused(this, true); stopFlag = true; endSession(true); disableSelf()
+        }
+    }
     override fun onInterrupt() {}
     override fun onDestroy() { instance = null; super.onDestroy() }
 
