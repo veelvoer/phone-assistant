@@ -382,7 +382,7 @@ object CallManager {
             if (System.currentTimeMillis() - startedAt > 4 * 60_000L) { say(if (nl) "Ik moet dit gesprek nu afronden. Ik geef uw boodschap door. Tot ziens." else "I have to wrap up now. I'll pass on your message. Goodbye.") { finish("time limit") }; return }
             if (c.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { finish("no microphone permission"); return }
             rec?.destroy()
-            val r = SpeechRecognizer.createSpeechRecognizer(c); rec = r
+            val r = RecognizerPick.create(c); rec = r
             r.setRecognitionListener(object : RecognitionListener {
                 override fun onResults(b: Bundle?) {
                     val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()

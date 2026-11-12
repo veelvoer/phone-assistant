@@ -320,7 +320,7 @@ class AgentService : AccessibilityService() {
     private fun startRec() {
         if (!voice || speaking) return
         rec?.destroy()
-        val r = SpeechRecognizer.createSpeechRecognizer(this); rec = r
+        val r = RecognizerPick.create(this); rec = r
         fun again(ms: Long) = main.postDelayed({ startRec() }, ms)
         r.setRecognitionListener(object : RecognitionListener {
             override fun onPartialResults(b: Bundle?) { b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { partial = it; refreshOverlay() } }

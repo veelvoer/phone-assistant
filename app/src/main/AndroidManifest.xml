@@ -29,6 +29,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service android:name=".AssistService" android:exported="true" android:label="Assistant" android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <meta-data android:name="android.voice_interaction" android:resource="@xml/voice_interaction" />
+            <intent-filter><action android:name="android.service.voice.VoiceInteractionService" /></intent-filter>
+        </service>
+        <service android:name=".AssistSessionService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service android:name=".AssistRecognitionService" android:exported="true" android:label="Assistant">
+            <intent-filter><action android:name="android.speech.RecognitionService" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+            <meta-data android:name="android.speech" android:resource="@xml/voice_interaction_recognizer" />
+        </service>
+        <activity android:name=".AssistActivity" android:exported="true" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true" android:noHistory="true">
+            <intent-filter><action android:name="android.intent.action.ASSIST" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+        </activity>
         <receiver android:name=".TestReceiver" android:exported="true" android:permission="android.permission.DUMP">
             <intent-filter><action android:name="app.phoneassistant.RUN" /><action android:name="app.phoneassistant.STOP" /></intent-filter>
         </receiver>
