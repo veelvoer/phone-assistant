@@ -41,24 +41,39 @@ object Updater {
         busy = true; message = "Checking…"; ui()
         thread {
             try {
-                val con = URL("https://api.github.com/repos/$REPO/releases?per_page=30").openConnection() as HttpURLConnection
-                con.setRequestProperty("Accept", "application/vnd.github+json"); con.connectTimeout = 15000; con.readTimeout = 15000
-                // newest phone release (tag v1.2.3) that has an APK; the desktop app has its own releases (desktop-v…) in the same repo
-                val list = org.json.JSONArray(con.inputStream.bufferedReader().use { it.readText() })
-                var j: JSONObject? = null
-                for (k in 0 until list.length()) { val r = list.getJSONObject(k); if (!r.optBoolean("draft") && Regex("^v\\d+\\.\\d+").containsMatchIn(r.optString("tag_name"))) { j = r; break } }
-                if (j == null) { message = "No release found"; busy = false; ui(); return@thread }
-                val tag = j.getString("tag_name")
-                val assets = j.getJSONArray("assets")
-                var apk = ""
-                for (i in 0 until assets.length()) assets.getJSONObject(i).let { if (it.getString("name").endsWith(".apk")) apk = it.getString("browser_download_url") }
+                // the API allows 60 calls/hour per IP (shared on mobile data): if it refuses, fall back to the releases feed + the fixed APK name
+                val (tag, notes, apk) = try { fromApi() } catch (e: Exception) { fromFeed() ?: throw e }
+                if (tag.isEmpty()) { message = "No release found"; busy = false; ui(); return@thread }
                 checkedAt = System.currentTimeMillis()
-                if (apk.isNotEmpty() && newer(tag, current(c))) { rel = Rel(tag.trimStart('v'), j.optString("body"), apk); message = "" }
+                if (apk.isNotEmpty() && newer(tag, current(c))) { rel = Rel(tag.trimStart('v'), notes, apk); message = "" }
                 else { rel = null; message = "You're up to date (v${current(c)})" }
             } catch (e: Exception) { message = "Update check failed: ${e.message}" }
             busy = false; ui()
         }
     }
+
+    private fun fromApi(): Triple<String, String, String> {
+        val con = URL("https://api.github.com/repos/$REPO/releases?per_page=30").openConnection() as HttpURLConnection
+        con.setRequestProperty("Accept", "application/vnd.github+json"); con.connectTimeout = 15000; con.readTimeout = 15000
+        if (con.responseCode != 200) throw RuntimeException("GitHub said HTTP ${con.responseCode}" + if (con.responseCode == 403 || con.responseCode == 429) " (too many checks, try again later)" else "")
+        // newest phone release (tag v1.2.3) that has an APK; the desktop app has its own releases (desktop-v…) in the same repo
+        val list = org.json.JSONArray(con.inputStream.bufferedReader().use { it.readText() })
+        for (k in 0 until list.length()) {
+            val r = list.getJSONObject(k)
+            if (r.optBoolean("draft") || !Regex("^v\\d+\\.\\d+").containsMatchIn(r.optString("tag_name"))) continue
+            val assets = r.getJSONArray("assets"); var apk = ""
+            for (i in 0 until assets.length()) assets.getJSONObject(i).let { if (it.getString("name").endsWith(".apk")) apk = it.getString("browser_download_url") }
+            return Triple(r.getString("tag_name"), r.optString("body"), apk)
+        }
+        return Triple("", "", "")
+    }
+
+    private fun fromFeed(): Triple<String, String, String>? = try {
+        val con = URL("https://github.com/$REPO/releases.atom").openConnection() as HttpURLConnection
+        con.connectTimeout = 15000; con.readTimeout = 15000
+        val xml = con.inputStream.bufferedReader().use { it.readText() }
+        Regex("/releases/tag/(v\\d+\\.\\d+[^\"<]*)").find(xml)?.groupValues?.get(1)?.let { Triple(it, "", "https://github.com/$REPO/releases/download/$it/phone-assistant.apk") }
+    } catch (e: Exception) { null }
 
     fun install(c: Context) {
         val r = rel ?: return
