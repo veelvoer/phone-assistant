@@ -18,15 +18,40 @@ object AssistLaunch {
     }
 }
 
-/** Android may make our placeholder recognizer the system default once we are the default assistant, so always bind to a real one explicitly. */
+/** Android may make our placeholder recognizer the system default once we are the default assistant, so always bind to a real one explicitly.
+ *  Some phones ship a broken recognizer (errors 11/12 on every try): then rotate through the others and remember the one that works. */
 object RecognizerPick {
-    fun create(c: android.content.Context): android.speech.SpeechRecognizer {
+    private const val ON_DEVICE = "on-device"
+    private fun p(c: android.content.Context) = c.getSharedPreferences("p", android.content.Context.MODE_PRIVATE)
+
+    private fun candidates(c: android.content.Context): List<String> {
+        val out = ArrayList<String>()
         try {
-            val list = c.packageManager.queryIntentServices(Intent(android.speech.RecognitionService.SERVICE_INTERFACE), 0).filter { it.serviceInfo.packageName != c.packageName }
-            val pick = list.firstOrNull { it.serviceInfo.packageName == "com.google.android.googlequicksearchbox" } ?: list.firstOrNull()
-            if (pick != null) return android.speech.SpeechRecognizer.createSpeechRecognizer(c, android.content.ComponentName(pick.serviceInfo.packageName, pick.serviceInfo.name))
+            val def = android.provider.Settings.Secure.getString(c.contentResolver, "voice_recognition_service").orEmpty()
+            if (def.isNotEmpty() && !def.startsWith(c.packageName + "/")) out.add(def)
+            val list = c.packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0).filter { it.serviceInfo.packageName != c.packageName }
+                .sortedBy { if (it.serviceInfo.packageName == "com.google.android.googlequicksearchbox") 0 else 1 }
+            list.map { android.content.ComponentName(it.serviceInfo.packageName, it.serviceInfo.name).flattenToString() }.forEach { if (it !in out) out.add(it) }
+        } catch (e: Exception) { }
+        if (android.os.Build.VERSION.SDK_INT >= 31 && android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(c)) out.add(ON_DEVICE)
+        return out
+    }
+
+    fun create(c: android.content.Context): android.speech.SpeechRecognizer {
+        val all = candidates(c)
+        val pick = all.getOrNull(p(c).getInt("rec_idx", 0).mod(all.size.coerceAtLeast(1)))
+        try {
+            if (pick == ON_DEVICE && android.os.Build.VERSION.SDK_INT >= 31) return android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(c)
+            if (pick != null) return android.speech.SpeechRecognizer.createSpeechRecognizer(c, android.content.ComponentName.unflattenFromString(pick))
         } catch (e: Exception) { }
         return android.speech.SpeechRecognizer.createSpeechRecognizer(c)
+    }
+
+    /** Switch to the next recognizer; returns its name for the log. */
+    fun next(c: android.content.Context): String {
+        val all = candidates(c); if (all.size < 2) return all.firstOrNull() ?: "default"
+        val i = (p(c).getInt("rec_idx", 0) + 1).mod(all.size); p(c).edit().putInt("rec_idx", i).apply()
+        return all[i].substringBefore('/')
     }
 }
 
