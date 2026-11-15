@@ -638,6 +638,7 @@ class AgentService : AccessibilityService() {
         "open_url" -> "Opening link"
         "draw" -> "Drawing for you"
         "volume" -> "Setting volume"
+        "remind" -> "Setting a reminder"
         "ask_user" -> "Asking you"
         "plan" -> statusLine.ifEmpty { "Planning" }
         else -> "Working…"
@@ -672,7 +673,7 @@ class AgentService : AccessibilityService() {
             sessionTask = taskText
             while (turns.size > 40) turns.removeAt(0)
             if (stopFlag) { Bus.log("■ Stopped"); return }
-            val firstText = (if (lessons().isEmpty()) "" else "Lessons from earlier corrections by the user (ALWAYS follow them):\n" + lessons().joinToString("\n") + "\n\n") + (if (facts().isEmpty()) "" else "About the user (saved memory; use it to resolve \"my mom\", \"me\", etc.):\n" + facts().joinToString("\n") + "\n\n") + (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty()) "" else "Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n" + notes.joinToString("\n") + "\n\n") + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() + "\n(First call the plan tool.)" else "")
+            val firstText = (if (lessons().isEmpty()) "" else "Lessons from earlier corrections by the user (ALWAYS follow them):\n" + lessons().joinToString("\n") + "\n\n") + (if (facts().isEmpty()) "" else "About the user (saved memory; use it to resolve \"my mom\", \"me\", etc.):\n" + facts().joinToString("\n") + "\n\n") + (if (names().isEmpty()) "" else "Known names/words of the user (speech recognition often mishears names: correct what they said to the closest of these): " + names().joinToString(", ") + (aliases().let { if (it.isEmpty()) "" else "\nLearned corrections (heard=actual): " + it.joinToString("; ") }) + "\n\n") + (if (notes.isEmpty()) "" else "Earlier commands this session (the new message may correct, undo or continue them; check the screen and fix what is wrong):\n" + notes.joinToString("\n") + "\n\n") + "Now: " + java.text.SimpleDateFormat("EEEE yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()) + "\n" + "Task: $taskText" + (if (turns.isEmpty()) "\n\n" + observe() + "\n(First call the plan tool.)" else "")
             val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", if (hearth) firstText else JSONArray().put(text(firstText))))
             for ((i, t) in turns.withIndex()) {
                 val lastTurn = i == turns.lastIndex
@@ -839,6 +840,8 @@ class AgentService : AccessibilityService() {
         a.put(tool("forget", "Delete saved facts containing this text.", JSONObject().put("text", p("string")), listOf("text")))
         a.put(tool("open_url", "Open a link or intent directly: https://..., tel:+32..., sms:+32...?body=..., mailto:, geo:0,0?q=place. Opens the dialer (not an auto-call) for tel:.", JSONObject().put("url", p("string")), listOf("url")))
         a.put(tool("volume", "Set volume 0-100 for stream 'media' (default) or 'ring'.", JSONObject().put("level", p("integer")).put("stream", p("string")), listOf("level")))
+        a.put(tool("remind", "Set a reminder that goes off at a set time (works with the phone on silent). If the user gave no time (only a day, or nothing), ask_user for the time first. Then ALWAYS ask_user whether you should shout it out loud at full volume (loud=true) or just show a notification (loud=false), unless they already said so. Use local time from 'Now:'.",
+            JSONObject().put("at", p("string", "local date and time, format yyyy-MM-dd HH:mm")).put("text", p("string", "what to remind, short, in the user's language, e.g. 'mama bellen'")).put("loud", p("boolean", "true = say it out loud at full volume")), listOf("at", "text", "loud")))
         a.put(tool("read_screen", "Return ALL visible text on screen untruncated (use to read long messages/articles or answer questions about the screen).", JSONObject()))
         a.put(tool("remember_name", "Save a person's/place's exact name for future requests. Call it after you successfully picked a recipient/contact whose real name differs from how the user said it.", JSONObject().put("spoken", p("string", "how the user said it")).put("actual", p("string", "exact name as shown in the app")), listOf("actual")))
         a.put(tool("ask_user", "Ask the user a short question out loud and wait for their spoken answer. Use when the request is unclear or doesn't match what's on screen, when several options fit (e.g. two contacts), when something unexpected blocks you (login, captcha, permission), or after two different approaches failed.", JSONObject().put("question", p("string")), listOf("question")))
@@ -888,6 +891,11 @@ class AgentService : AccessibilityService() {
                     val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
                     val st = if (i.optString("stream", "media") == "ring") android.media.AudioManager.STREAM_RING else android.media.AudioManager.STREAM_MUSIC
                     val max = am.getStreamMaxVolume(st); am.setStreamVolume(st, (i.getInt("level") * max / 100).coerceIn(0, max), android.media.AudioManager.FLAG_SHOW_UI); "volume set"
+                }
+                "remind" -> {
+                    val at = try { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).parse(i.getString("at").trim().replace('T', ' ').take(16))!!.time } catch (e: Exception) { 0L }
+                    if (at <= System.currentTimeMillis()) "error: 'at' must be a future local time as yyyy-MM-dd HH:mm"
+                    else { Reminders.add(this, at, i.getString("text"), i.optBoolean("loud")); "reminder set for " + java.text.SimpleDateFormat("EEEE d MMMM HH:mm", java.util.Locale.forLanguageTag(langTag())).format(java.util.Date(at)) + if (i.optBoolean("loud")) " (loud)" else "" }
                 }
                 "read_screen" -> readScreen()
                 "tap_labels" -> tapLabels(i.getJSONArray("labels"))
@@ -1307,7 +1315,7 @@ private const val SYSTEM_TEXT = """You control an Android phone to complete the 
 Reply with your 1-2 sentence thinking, then a JSON array of actions (nothing after it), e.g.
 GOAL: send a snap to Anna. Snapchat isn't open yet. [{"tool":"open_app","name":"Snapchat"}]
 Tools:
-open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{screen_now,goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | tap_labels{labels:[...]} (tap a sequence of buttons by label: digits, keypads) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | learn{lesson} (a rule from a correction by the user) | forget{text} | open_url{url} | volume{level,stream?} | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
+open_app{name} | tap{id} | tap_xy{x,y} (real screen pixels) | long_press{id or x,y} | type{text,id?,submit?} (replaces field text; submit presses Enter/Send) | scroll{direction: up|down|left|right} (down = see content further down) | swipe{x1,y1,x2,y2,ms?} | key{key: back|home|recents|notifications|quick_settings|lock|screenshot} | wait{seconds} | plan{screen_now,goal,done_when,items:[{text,status: pending|doing|done|skipped}]} (your goal and to-do list; send everything; do this first) | highlight{items:[{id|x,y,w,h, label}],seconds} (point things out to the user on screen) | tap_labels{labels:[...]} (tap a sequence of buttons by label: digits, keypads) | find_tap{text} (finds by text, scrolls if needed, taps) | remember{fact} (short lasting fact about the user) | learn{lesson} (a rule from a correction by the user) | forget{text} | open_url{url} | volume{level,stream?} | remind{at: "yyyy-MM-dd HH:mm", text, loud} (reminder; ask_user the time if missing, then ask whether to shout it at full volume) | read_screen{} (all visible text) | remember_name{spoken,actual} | ask_user{question} (asks the user out loud, returns their answer) | finish{message,evidence} (only when done_when is verified)
 No screenshots are available.
 $RULES
 Always end your reply with the JSON array of actions."""

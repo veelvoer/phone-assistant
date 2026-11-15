@@ -272,7 +272,8 @@ object CallManager {
         thread {
             val reply = try { chatAsk(c, chat) } catch (e: Exception) { event("chat AI error: ${e.message}"); return@thread }
             main.post {
-                val end = reply.contains("[END]"); val say = reply.replace("[END]", "").trim()
+                val end = reply.contains("[END]"); val say = reply.replace("[END]", "").replace("[URGENT]", "").trim()
+                if (reply.contains("[URGENT]")) urgent(c, chat.label)
                 if (say.isNotEmpty()) {
                     chat.history.put(JSONObject().put("role", "assistant").put("content", say)); chat.lastSent = say; chat.replies++
                     if (chat.pkg == PHONE) sendSms(c, chat.number!!, say) else replyViaNotification(c, action, say)
@@ -296,7 +297,7 @@ object CallManager {
         val nl = dutch(c); val who = owner(c); val ai = aiName(c)
         val rules = p(c).getString("call_rules", "").orEmpty().trim().ifEmpty { if (nl) "Vraag wie er is en waarom hij/zij belde, noteer een boodschap en zeg dat $who zo snel mogelijk antwoordt." else "Ask who it is and why they called, take a message and say $who will reply as soon as possible." }
         val sys = "You are $ai, the AI assistant of $who, chatting by text message with someone who just called $who and didn't get an answer. You already told them you are an AI assistant. Write ${if (nl) "Dutch" else "English"}, short and natural (one or two sentences, no markdown). Your job: $rules " +
-            "Never share personal information about $who (address, schedule, whereabouts, finances, health), never agree to payments, purchases, links or codes, never promise anything except passing on the message. If it is spam or sales, politely end it. When you have what you need (or they say goodbye), end with a short goodbye and add the exact token [END] at the very end."
+            "Never share personal information about $who (address, schedule, whereabouts, finances, health), never agree to payments, purchases, links or codes, never promise anything except passing on the message. If it is spam or sales, politely end it. " + urgentRule(c) + "When you have what you need (or they say goodbye), end with a short goodbye and add the exact token [END] at the very end."
         val body = JSONObject().put("model", if (cfg.hearth) cfg.model else "claude-haiku-5-5").put("max_tokens", 160).put("system", sys).put("messages", chat.history)
         val resp = Api.post(cfg.url, cfg.key, body); Usage.record(c, "claude-haiku-5-5", resp, cfg.hearth)
         val content = resp.getJSONArray("content")
@@ -347,6 +348,7 @@ object CallManager {
         private var turns = 0
         private var done = false
         private var errs = 0
+        private var isUrgent = false
         private val startedAt = System.currentTimeMillis()
         private val transcript = StringBuilder()
         private val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -433,7 +435,8 @@ object CallManager {
             thread {
                 val reply = try { ask() } catch (e: Exception) { event("call AI error: ${e.message}"); if (nl) "Sorry, er ging iets mis. Ik geef uw boodschap door. Tot ziens. [END]" else "Sorry, something went wrong. I'll pass on your message. Goodbye. [END]" }
                 main.post {
-                    val end = reply.contains("[END]"); val say = reply.replace("[END]", "").trim()
+                    val end = reply.contains("[END]"); val say = reply.replace("[END]", "").replace("[URGENT]", "").trim()
+                    if (reply.contains("[URGENT]")) isUrgent = true   // shouted after hanging up, so it doesn't go through the call
                     history.put(JSONObject().put("role", "assistant").put("content", say.ifEmpty { "..." }))
                     if (say.isEmpty()) { if (end) finish("conversation complete") else listen() }
                     else say(say) { if (end || turns >= 14) finish("conversation complete") else listen() }
@@ -447,7 +450,7 @@ object CallManager {
             val rules = p(c).getString("call_rules", "").orEmpty().trim().ifEmpty { if (nl) "Vraag wie er belt en waarom, noteer een boodschap en zeg dat $who zo snel mogelijk terugbelt." else "Ask who is calling and why, take a message and say $who will call back as soon as possible." }
             val sys = "You are $ai, the AI phone assistant of $who. You are on a live phone call with a caller; everything you write is spoken aloud. You already told the caller you are an AI assistant. Speak ${if (nl) "Dutch" else "English"}, natural and warm, ONE or TWO short sentences per turn, no lists, no markdown. " +
                 "Your job: $rules " +
-                "Never share personal information about $who (address, schedule, whereabouts, finances, health), never confirm or deny who $who is with, never agree to payments, purchases, links or codes, and never promise anything on behalf of $who except passing on the message. If the caller is a sales or spam call, politely end it. If you do not understand, ask them to repeat. " +
+                "Never share personal information about $who (address, schedule, whereabouts, finances, health), never confirm or deny who $who is with, never agree to payments, purchases, links or codes, and never promise anything on behalf of $who except passing on the message. If the caller is a sales or spam call, politely end it. If you do not understand, ask them to repeat. " + urgentRule(c) +
                 (if (userInitiated) "$who is on the line too and asked you to help with this call: when you are done, say you are handing the call back to $who, then add the exact token [END]. " else "") + "When the conversation is finished (you have the name and the reason, or the caller wants to hang up) say a short goodbye and add the exact token [END] at the very end."
             val body = JSONObject().put("model", if (cfg.hearth) cfg.model else "claude-haiku-5-5").put("max_tokens", 160).put("system", sys).put("messages", history)
             val resp = Api.post(cfg.url, cfg.key, body)
@@ -466,6 +469,7 @@ object CallManager {
             if (!userInitiated) hangUp(c, info)   // when you asked it to help during your call, the call stays yours
             speakerOn(false)
             session = null
+            if (isUrgent) h.postDelayed({ urgent(c, info.label) }, 1200)
             val t = transcript.toString()
             thread {
                 val summary = try { summarize(c, t) } catch (e: Exception) { if (t.isBlank()) "" else t.takeLast(300) }
@@ -475,6 +479,18 @@ object CallManager {
                 }
             }
         }
+    }
+
+    // ---------- urgent: wake the owner up ----------
+    private fun urgentOn(c: Context) = p(c).getBoolean("call_urgent", true)
+    private fun urgentRule(c: Context) = if (!urgentOn(c)) "" else
+        "Always ask whether it is urgent (whether ${owner(c)} must be reached right now). Only if the caller clearly says it is urgent or an emergency, add the exact token [URGENT] once to that reply and tell them you are alerting ${owner(c)} right away. "
+    private fun urgent(c: Context, who: String) {
+        if (!urgentOn(c)) return
+        event("URGENT: $who needs you")
+        val name = Shout.ownerName(c)
+        val text = if (dutch(c)) (if (name.isNotEmpty()) "$name! " else "") + "$who heeft je nodig! Het is dringend." else (if (name.isNotEmpty()) "$name! " else "") + "$who needs you! It is urgent."
+        Shout.say(c, if (dutch(c)) "Dringend: $who" else "Urgent: $who", text)
     }
 
     // ---------- log + notification ----------
