@@ -334,9 +334,11 @@ class AgentService : AccessibilityService() {
                 partial = ""
                 if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) { refreshOverlay(); again(150); return }
                 Bus.log("Recognizer error $error (try ${errStreak + 1})")
-                if (error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE || errStreak % 2 == 1)
-                    Bus.log("Switching speech recognizer to " + RecognizerPick.next(this@AgentService))
-                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || ++errStreak >= 12) { Bus.log("Voice stopped: recognizer error $error"); endSession(false); return }
+                // a recognizer that refuses us (9 = no permission for it, 12/13 = language) or keeps dropping (11) is skipped; others get 3 tries first
+                val hard = error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
+                if (hard || error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || errStreak % 3 == 2)
+                    Bus.log("Switching speech recognizer to " + RecognizerPick.next(this@AgentService, markBad = hard))
+                if (++errStreak >= 12) { Bus.log("Voice stopped: recognizer error $error"); endSession(false); return }
                 again(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 800 else 400)
             }
             override fun onReadyForSpeech(p: Bundle?) {}

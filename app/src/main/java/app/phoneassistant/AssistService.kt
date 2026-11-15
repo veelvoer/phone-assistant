@@ -47,10 +47,16 @@ object RecognizerPick {
         return android.speech.SpeechRecognizer.createSpeechRecognizer(c)
     }
 
-    /** Switch to the next recognizer; returns its name for the log. */
-    fun next(c: android.content.Context): String {
-        val all = candidates(c); if (all.size < 2) return all.firstOrNull() ?: "default"
-        val i = (p(c).getInt("rec_idx", 0) + 1).mod(all.size); p(c).edit().putInt("rec_idx", i).apply()
+    private val bad = HashSet<String>()   // refused us this run (permission/language): skip
+
+    /** Switch to the next usable recognizer; returns its name for the log. */
+    fun next(c: android.content.Context, markBad: Boolean = false): String {
+        val all = candidates(c); if (all.isEmpty()) return "default"
+        var i = p(c).getInt("rec_idx", 0).mod(all.size)
+        if (markBad) bad.add(all[i])
+        if (bad.size >= all.size) bad.clear()
+        do { i = (i + 1).mod(all.size) } while (all[i] in bad)
+        p(c).edit().putInt("rec_idx", i).apply()
         return all[i].substringBefore('/')
     }
 }
