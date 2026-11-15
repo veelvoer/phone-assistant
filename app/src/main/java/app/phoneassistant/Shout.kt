@@ -26,13 +26,13 @@ object Shout {
     fun dutch(c: Context) = c.getSharedPreferences("p", Context.MODE_PRIVATE).getString("lang", "nl-BE").orEmpty().startsWith("nl")
     fun ownerName(c: Context) = c.getSharedPreferences("p", Context.MODE_PRIVATE).getString("call_owner", "").orEmpty().trim()
 
-    fun say(c: Context, title: String, text: String, repeats: Int = 3, done: () -> Unit = {}) {
+    fun say(c: Context, title: String, text: String, repeats: Int = 3, volume: Int = 100, done: () -> Unit = {}) {
         val app = c.applicationContext
         notify(app, title, text, true)
         main.post {
             val audio = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val saved = audio.getStreamVolume(AudioManager.STREAM_ALARM)
-            try { audio.setStreamVolume(AudioManager.STREAM_ALARM, audio.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0) } catch (e: Exception) { }
+            try { audio.setStreamVolume(AudioManager.STREAM_ALARM, (audio.getStreamMaxVolume(AudioManager.STREAM_ALARM) * volume.coerceIn(5, 100) / 100).coerceAtLeast(1), 0) } catch (e: Exception) { }
             vibrate(app)
             var finished = false
             fun end() {
@@ -53,14 +53,21 @@ object Shout {
                     override fun onDone(id: String?) { if (id == "last") main.post { end() } }
                     @Deprecated("old api") override fun onError(id: String?) { main.post { end() } }
                 })
-                for (k in 1..repeats) {
-                    e.speak(text, TextToSpeech.QUEUE_ADD, null, if (k == repeats) "last" else "s$k")
+                for (k in 1..repeats.coerceIn(1, 10)) {
+                    e.speak(text, TextToSpeech.QUEUE_ADD, null, if (k == repeats.coerceIn(1, 10)) "last" else "s$k")
                     if (k < repeats) e.playSilentUtterance(1200, TextToSpeech.QUEUE_ADD, "p$k")
                 }
             }
             tts = t
-            main.postDelayed({ end() }, 60_000)   // never leave the alarm volume at max
+            main.postDelayed({ end() }, 120_000)   // never leave the alarm volume at max
         }
+    }
+
+    /** Fills {name}, {caller}, {text} in a user's message template; drops a leading "{name}! " when no name is set. */
+    fun fill(template: String, name: String, vararg pairs: Pair<String, String>): String {
+        var t = if (name.isEmpty()) template.replace(Regex("\\{name\\}[!,.]?\\s*"), "") else template.replace("{name}", name)
+        pairs.forEach { (k, v) -> t = t.replace("{$k}", v) }
+        return t.trim()
     }
 
     private fun vibrate(c: Context) {
@@ -96,6 +103,23 @@ object Reminders {
         arm(c, id, at); return id
     }
 
+    fun list(c: Context): List<JSONObject> { val a = all(c); return (0 until a.length()).map { a.getJSONObject(it) }.sortedBy { it.optLong("at") } }
+
+    fun update(c: Context, id: Int, at: Long, text: String, loud: Boolean) {
+        val a = all(c)
+        for (i in 0 until a.length()) a.getJSONObject(i).let { if (it.optInt("id") == id) it.put("at", at).put("text", text).put("loud", loud) }
+        save(c, a); arm(c, id, at)
+    }
+
+    fun delete(c: Context, id: Int) { take(c, id); (c.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pi(c, id)) }
+
+    private fun pi(c: Context, id: Int) = PendingIntent.getBroadcast(c, id, Intent(c, ReminderReceiver::class.java).putExtra("id", id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    fun defaultMessage(c: Context) = if (Shout.dutch(c)) "{name}! Herinnering: {text}" else "{name}! Reminder: {text}"
+    fun message(c: Context, text: String) = Shout.fill(p(c).getString("rem_msg", "").orEmpty().ifBlank { defaultMessage(c) }, Shout.ownerName(c), "text" to text)
+    fun shout(c: Context, text: String, done: () -> Unit = {}) =
+        Shout.say(c, if (Shout.dutch(c)) "Herinnering" else "Reminder", message(c, text), p(c).getInt("rem_repeats", 3), p(c).getInt("rem_volume", 100), done)
+
     fun take(c: Context, id: Int): JSONObject? {
         val a = all(c); val out = JSONArray(); var hit: JSONObject? = null
         for (i in 0 until a.length()) a.getJSONObject(i).let { if (it.optInt("id") == id) hit = it else out.put(it) }
@@ -109,7 +133,7 @@ object Reminders {
 
     private fun arm(c: Context, id: Int, at: Long) {
         val am = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pi = PendingIntent.getBroadcast(c, id, Intent(c, ReminderReceiver::class.java).putExtra("id", id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val pi = pi(c, id)
         if (android.os.Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
         else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
     }
@@ -119,12 +143,9 @@ class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_BOOT_COMPLETED || i.action == Intent.ACTION_MY_PACKAGE_REPLACED) { Reminders.rearm(c); return }
         val r = Reminders.take(c, i.getIntExtra("id", -1)) ?: return
-        val text = r.optString("text"); val nl = Shout.dutch(c)
-        val title = if (nl) "Herinnering" else "Reminder"
-        if (!r.optBoolean("loud")) { Shout.notify(c, title, text, false); return }
-        val name = Shout.ownerName(c)
-        val say = (if (name.isNotEmpty()) "$name! " else "") + (if (nl) "Herinnering: $text" else "Reminder: $text")
+        val text = r.optString("text")
+        if (!r.optBoolean("loud")) { Shout.notify(c, if (Shout.dutch(c)) "Herinnering" else "Reminder", text, false); return }
         val pending = goAsync()
-        Shout.say(c, title, say) { try { pending.finish() } catch (e: Exception) { } }
+        Reminders.shout(c, text) { try { pending.finish() } catch (e: Exception) { } }
     }
 }

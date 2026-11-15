@@ -488,10 +488,11 @@ object CallManager {
     private fun urgent(c: Context, who: String) {
         if (!urgentOn(c)) return
         event("URGENT: $who needs you")
-        val name = Shout.ownerName(c)
-        val text = if (dutch(c)) (if (name.isNotEmpty()) "$name! " else "") + "$who heeft je nodig! Het is dringend." else (if (name.isNotEmpty()) "$name! " else "") + "$who needs you! It is urgent."
-        Shout.say(c, if (dutch(c)) "Dringend: $who" else "Urgent: $who", text)
+        Shout.say(c, if (dutch(c)) "Dringend: $who" else "Urgent: $who", urgentMessage(c, who), p(c).getInt("urgent_repeats", 3), p(c).getInt("urgent_volume", 100))
     }
+    fun urgentDefault(c: Context) = if (dutch(c)) "{name}! {caller} heeft je nodig! Het is dringend." else "{name}! {caller} needs you! It is urgent."
+    fun urgentMessage(c: Context, who: String) = Shout.fill(p(c).getString("urgent_msg", "").orEmpty().ifBlank { urgentDefault(c) }, Shout.ownerName(c), "caller" to who)
+    fun testUrgent(c: Context) = Shout.say(c, if (dutch(c)) "Dringend: test" else "Urgent: test", urgentMessage(c, if (dutch(c)) "Mama" else "Mom"), p(c).getInt("urgent_repeats", 3), p(c).getInt("urgent_volume", 100))
 
     // ---------- log + notification ----------
     private fun log(c: Context, who: String, what: String) {

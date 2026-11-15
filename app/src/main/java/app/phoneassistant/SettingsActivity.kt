@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.widget.*
+import org.json.JSONObject
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -53,7 +54,7 @@ class SettingsActivity : Activity() {
         })
         when (id) {
             "home" -> home(root); "ai" -> aiPage(root); "voice" -> voicePage(root); "shortcut" -> shortcutPage(root); "look" -> lookPage(root)
-            "me" -> personalityPage(root); "calls" -> callsPage(root); "memory" -> memoryPage(root); "budget" -> budgetPage(root); "about" -> aboutPage(root)
+            "me" -> personalityPage(root); "calls" -> callsPage(root); "reminders" -> remindersPage(root); "memory" -> memoryPage(root); "budget" -> budgetPage(root); "about" -> aboutPage(root)
         }
         scroll.removeAllViews(); scroll.addView(root); scroll.scrollTo(0, 0)
     }
@@ -64,7 +65,7 @@ class SettingsActivity : Activity() {
     override fun onDestroy() { tts?.shutdown(); super.onDestroy() }
     private fun runHooks() { hooks.toList().forEach { it() } }
 
-    private val TITLES = mapOf("home" to "Settings", "ai" to "AI", "voice" to "Voice", "shortcut" to "Shortcut", "look" to "Appearance", "me" to "Personality", "calls" to "Calls", "memory" to "Memory", "budget" to "Budget", "about" to "About")
+    private val TITLES = mapOf("home" to "Settings", "ai" to "AI", "voice" to "Voice", "shortcut" to "Shortcut", "look" to "Appearance", "me" to "Personality", "calls" to "Calls", "reminders" to "Reminders", "memory" to "Memory", "budget" to "Budget", "about" to "About")
 
     private fun home(root: LinearLayout) {
         fun row(icon: Int, id: String, sub: String) = ui.navRow(icon, TITLES[id]!!, sub) { open(id) }
@@ -73,6 +74,7 @@ class SettingsActivity : Activity() {
             row(R.drawable.ic_cat_ai, "ai", "Model, key, smart planning"), row(R.drawable.ic_mic, "voice", "Language, recognition quality, voice, volume"),
             row(R.drawable.ic_cat_key, "shortcut", p.getString("sc_label", "Essential Key").orEmpty()), row(R.drawable.ic_cat_look, "look", "Overlay colours, glow, card"),
             row(R.drawable.ic_cat_me, "me", "Name, tone, quiet hours"), row(R.drawable.ic_cat_call, "calls", if (CallManager.enabled(this)) "On" else "Let it answer and talk on calls"),
+            row(R.drawable.ic_check, "reminders", Reminders.list(this).size.let { if (it == 0) "None set · add, edit, loud alerts" else "$it set" }),
             row(R.drawable.ic_cat_memory, "memory", "About you, lessons, names"), row(R.drawable.ic_cat_budget, "budget", "Credits and limits"), row(R.drawable.ic_cat_info, "about", "Version v${Updater.current(this)} · updates"))
         rows.forEach { card.addView(it) }
         root.addView(card)
@@ -270,7 +272,6 @@ class SettingsActivity : Activity() {
             }, sub("Silent: when you don't pick up, it declines the call and chats with the caller by text (SMS, WhatsApp, Telegram…), then tells you what it was about. Talk: it answers on the loudspeaker; Android gives apps no access to call audio, so this is not silent and may fall back to texting. It always says it's your AI assistant.")))
             if (!on) return
             body.addView(ui.card(ui.toggleRow("Talk mode: play on the call stream", "Off (default): the voice plays like music, which the phone's echo cancellation usually leaves alone so the caller can hear it. Turn on only if that doesn't work for you.", p.getBoolean("call_voice_stream", false)) { v -> p.edit().putBoolean("call_voice_stream", v).apply() }))
-            body.addView(ui.card(ui.toggleRow("Urgent calls: wake me up", "The assistant asks the caller if it is urgent. If so, your phone says “<your name>! <caller> needs you” out loud at full volume, even on silent.", p.getBoolean("call_urgent", true)) { v -> p.edit().putBoolean("call_urgent", v).apply() }))
             val missing = CallManager.missingPermissions(this)
             val status = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             fun statusRow(ok: Boolean, text: String, actionLabel: String, action: () -> Unit) = LinearLayout(this).apply {
@@ -299,6 +300,12 @@ class SettingsActivity : Activity() {
             body.addView(ui.card(label("Your name for callers"), field("e.g. Warre", "call_owner"), sub("“Hello, I'm Assistant, Warre's AI assistant.” Empty = “my owner”."),
                 label("What it should do"), field("Ask who is calling and why, take a message and say I'll call back.", "call_rules", multi = true, minLines = 3),
                 label("Text reply message"), field("Hi, this is Assistant. I can't pick up right now…", "call_text", multi = true, minLines = 3), sub("Sent as an SMS (or in the app chat) when you pick “Silent text reply”. Empty = a friendly default.")))
+            body.addView(ui.sectionTitle("When it's urgent"))
+            body.addView(ui.card(bool("Wake me up for urgent calls", "The assistant asks the caller if it is urgent. If so, your phone says it out loud, even on silent.", "call_urgent", true),
+                ui.slider("Loudness", "Alarm volume while it speaks; your normal volume comes back after", 10, 100, p.getInt("urgent_volume", 100), { "$it%" }) { p.edit().putInt("urgent_volume", it).apply() },
+                ui.slider("Repeat", "How many times it says the message", 1, 10, p.getInt("urgent_repeats", 3), { "${it}×" }) { p.edit().putInt("urgent_repeats", it).apply() },
+                label("Message"), field(CallManager.urgentDefault(this), "urgent_msg", multi = true, minLines = 2), sub("{name} = your name above, {caller} = who called. Empty = the default."),
+                ui.button("Test it now") { runHooks(); CallManager.testUrgent(this) }.apply { layoutParams = ui.lp(top = 12) }))
             body.addView(ui.sectionTitle("Test and diagnostics"))
             val diag = ui.tv(CallManager.diagnostics(this) + "\n\n" + (CallManager.recentEvents().joinToString("\n").ifEmpty { "No call events yet." }), 12f, ui.c.onSurfaceV, mono = true)
             body.addView(ui.card(diag,
@@ -313,6 +320,55 @@ class SettingsActivity : Activity() {
             }).toTypedArray()))
         }
         root.addView(body); build()
+    }
+
+    private fun remindersPage(root: LinearLayout) {
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val fmt = java.text.SimpleDateFormat("EEE d MMM · HH:mm", Locale.getDefault())
+        fun paint() {
+            list.removeAllViews()
+            val all = Reminders.list(this)
+            if (all.isEmpty()) list.addView(sub("No reminders. Add one here or just ask the assistant: “remind me Saturday at 10 to call mom”."))
+            all.forEach { r -> list.addView(ui.navRow(R.drawable.ic_check, r.optString("text"), fmt.format(Date(r.optLong("at"))) + if (r.optBoolean("loud")) " · loud" else "") { editReminder(r) { open("reminders") } }) }
+            list.addView(ui.button("Add reminder", filled = true) { editReminder(null) { open("reminders") } }.apply { layoutParams = ui.lp(top = 10) })
+        }
+        paint()
+        root.addView(ui.sectionTitle("Upcoming")); root.addView(ui.card(list))
+        add(root, group("Loud reminders",
+            ui.slider("Loudness", "Alarm volume while it speaks; your normal volume comes back after", 10, 100, p.getInt("rem_volume", 100), { "$it%" }) { p.edit().putInt("rem_volume", it).apply() },
+            ui.slider("Repeat", "How many times it says the reminder", 1, 10, p.getInt("rem_repeats", 3), { "${it}×" }) { p.edit().putInt("rem_repeats", it).apply() },
+            label("Message"), field(Reminders.defaultMessage(this), "rem_msg", multi = true, minLines = 2), sub("{name} = your name (Calls → Your name for callers), {text} = the reminder. Empty = the default."),
+            ui.button("Test it now") { runHooks(); Reminders.shout(this, if (Shout.dutch(this)) "mama bellen" else "call mom") }.apply { layoutParams = ui.lp(top = 12) }))
+    }
+
+    private fun editReminder(r: JSONObject?, done: () -> Unit) {
+        val cal = java.util.Calendar.getInstance().apply { if (r != null) timeInMillis = r.optLong("at") else { add(java.util.Calendar.HOUR_OF_DAY, 1); set(java.util.Calendar.MINUTE, 0) }; set(java.util.Calendar.SECOND, 0) }
+        val fmt = java.text.SimpleDateFormat("EEE d MMM yyyy · HH:mm", Locale.getDefault())
+        val text = ui.field("What should I remind you of?").apply { setText(r?.optString("text").orEmpty()) }
+        val whenBtn = ui.button(fmt.format(cal.time)) {}
+        whenBtn.setOnClickListener {
+            android.app.DatePickerDialog(this, { _, y, m, d ->
+                cal.set(y, m, d)
+                TimePickerDialog(this, { _, h, min -> cal.set(java.util.Calendar.HOUR_OF_DAY, h); cal.set(java.util.Calendar.MINUTE, min); ui.setLabel(whenBtn, fmt.format(cal.time)) },
+                    cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE), true).show()
+            }, cal.get(java.util.Calendar.YEAR), cal.get(java.util.Calendar.MONTH), cal.get(java.util.Calendar.DAY_OF_MONTH)).show()
+        }
+        var loud = r?.optBoolean("loud") ?: false
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(ui.dp(20), ui.dp(8), ui.dp(20), 0)
+            addView(text); addView(whenBtn.apply { layoutParams = ui.lp(top = 12) })
+            addView(ui.toggleRow("Say it out loud", "At full volume, even on silent", loud) { loud = it }.apply { layoutParams = ui.lp(top = 8) }) }
+        val d = AlertDialog.Builder(this).setTitle(if (r == null) "New reminder" else "Edit reminder").setView(box)
+            .setPositiveButton("Save", null).setNegativeButton("Cancel", null)
+        if (r != null) d.setNeutralButton("Delete") { _, _ -> Reminders.delete(this, r.optInt("id")); done() }
+        val dlg = d.show()
+        dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val t = text.text.toString().trim()
+            when {
+                t.isEmpty() -> toast("Type what to remind")
+                cal.timeInMillis <= System.currentTimeMillis() -> toast("Pick a time in the future")
+                else -> { if (r == null) Reminders.add(this, cal.timeInMillis, t, loud) else Reminders.update(this, r.optInt("id"), cal.timeInMillis, t, loud); dlg.dismiss(); done() }
+            }
+        }
     }
 
     private fun chooseMode(pkg: String, done: () -> Unit) {
